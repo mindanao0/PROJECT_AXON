@@ -15,20 +15,22 @@ python3 -m pip install --user -e ~/code/PROJECT_AXON
 ใช้งานประจำ (อยู่ใน folder ของ repo ไม่ต้องใส่ `-p`):
 
 ```bash
-cd ~/code/PROJECT_VELA
+cd ~/code/<project ของคุณ>
 axon init                          # ทำ repo นี้เป็น project (ใส่คำสั่ง test ใต้ [checks] ในไฟล์ที่มันบอก)
 axon doctor                        # เช็ค sandbox, login ของ agent และ checks ก่อนใช้จริง
 axon add "แก้ error ตอน password ว่าง" -f   # สั่งสั้นๆ ได้; -f = ดู agent ทำงานสด (default agent: claude)
 axon ls                            # งานที่วิ่งอยู่บอกว่าวิ่งมานานเท่าไร และ output ล่าสุดกี่วินาทีก่อน
 axon apply 12                      # เอาผลงานลง folder จริงของ project (uncommitted, ทับงานคุณไม่ได้)
-axon chat                          # คุยกับ claude ใน sandbox (tmux)
+axon chat                          # คุยกับ claude ในโฟลเดอร์โปรเจกต์ (tmux, ไม่มี sandbox)
+axon brainstorm "เป้าหมาย"         # claude กับ codex วางแผนด้วยกัน (ถามคุณก่อน) แล้ว axon brainstorm ID --approve เพื่อสร้างงาน
 axon                               # เปิด GUI (ถ้ารันอยู่แล้วจะเปิดตัวเดิม)
 ```
 
 - ผลงานยังเข้า `refs/axon/attempts/*` เหมือนเดิม และเลือกลง folder จริงได้: ปุ่ม **Apply to my folder** ใน GUI, `axon apply ID` หรือใส่ `auto_apply = true` ในไฟล์ project ให้ลงเองทุกงานที่ผ่าน checks; ถ้าคุณแก้บรรทัดเดียวกันอยู่ มันจะไม่เขียนอะไรเลย
+- **Brainstorm** (หน้า Brainstorm หรือ `axon brainstorm`): Claude กับ Codex ถามคุณให้ครบ (ห้ามเดา) ร่างแผนแยกกัน เทียบกัน รวมเป็นแผนเดียว และให้อีกฝั่งตรวจ งานจริงเกิดเมื่อคุณกดสร้างเท่านั้น ตั้ง model/effort แยกขั้นเบา/หนักได้ในส่วน `[brainstorm]` ของ config
 - Agent chat ใน GUI เป็น terminal จริง (xterm.js ต่อ WebSocket เข้า tmux) พิมพ์แล้วเห็นทันที สีและเมนูเหมือน terminal ปุ่ม Esc/Tab/↑↓/Ctrl-C มีให้กดบนมือถือ
-- Chat ของ claude/codex ใช้ `~/.claude`, `~/.claude.json`, `~/.codex` ของคุณเอง (login, settings และประวัติชุดเดียวกับที่ใช้นอก Axon; agent ใน sandbox อ่าน-เขียนสามโฟลเดอร์/ไฟล์นี้ได้) และเห็น clone ที่ path ของ project จริง: `/resume` จึงเห็น session เดิมของโปรเจกต์ ส่วนงาน (task) ยังใช้ home แยกของ Axon
-- Agent chat มีตัวเลือก **Shell**: bash ธรรมดาใน sandbox เดียวกัน (clone ของ project, folder `rw`, มีเน็ต; ไม่เห็น home/ไฟล์อื่นของคุณ) ใช้ได้เหมือน terminal ปกติ: ปุ่มทุกปุ่ม สี resize, ลากเลือกข้อความ = copy ลง clipboard, **Ctrl+Shift+V** = paste (Ctrl+V ส่งให้โปรแกรมเหมือน terminal บน Linux), wheel เลื่อนย้อน
+- Chat ของ claude/codex ใช้ `~/.claude`, `~/.claude.json`, `~/.codex` ของคุณเอง (login, settings และประวัติชุดเดียวกับที่ใช้นอก Axon; **chat ไม่มี sandbox**: agent รันเป็นคุณในโฟลเดอร์โปรเจกต์จริง เห็นและแก้ไฟล์เดียวกับ terminal ปกติ รวมถึง home, credential และ git push; จำกัดแค่หน่วยความจำ `chat_memory` ผ่าน systemd scope) `/resume` จึงเห็น session เดิมของโปรเจกต์ ส่วนงาน (task) ยังใช้ home แยกของ Axon
+- Agent chat มีตัวเลือก **Shell**: bash ธรรมดาในโฟลเดอร์โปรเจกต์ (home จริงของคุณ, มีเน็ต) ใช้ได้เหมือน terminal ปกติ: ปุ่มทุกปุ่ม สี resize, ลากเลือกข้อความ = copy ลง clipboard, **Ctrl+Shift+V** = paste (Ctrl+V ส่งให้โปรแกรมเหมือน terminal บน Linux), wheel หรือปัดนิ้วบนจอ/ปุ่ม Scroll ▲▼ เลื่อนย้อน
 - Agent ค้นเว็บและอ่านหน้าเว็บได้ (Claude: WebSearch/WebFetch, Codex: `--search`) แต่คำสั่งที่มันรันและ checks ยังไม่มีเน็ต ปิดได้ด้วย `[agents] web = false` ใน `~/.config/axon/config.toml`
 - แก้ไฟล์นอก project: ใส่ใน `~/.config/axon/projects/<ชื่อ>.toml`
 
@@ -80,18 +82,18 @@ CODEX_HOME=~/.local/share/axon/agents/codex codex login --device-auth
 - Coding agent อ่าน–แก้โค้ด–รันทดสอบได้ภายใน assigned workspace ตามสิทธิ์ที่บังคับใช้จริง
 - Local LLM เริ่มจากสรุป context และวิเคราะห์ log; เพิ่ม coding หลัง Agent Runner ผ่านการทดสอบและอนุญาตบทบาทนั้น
 - UI bind แค่ `127.0.0.1`; เข้าจากเครื่องอื่นผ่าน `tailscale serve` + รหัสผ่าน (`axon remote`)
-- ผู้ใช้คนเดียว, project แรกคือ PROJECT_VELA, ใช้ subscription แผน 20 USD
+- ผู้ใช้คนเดียว, หลาย project, ใช้ subscription ของ Claude/Codex ที่ผู้ใช้มี
 - เป้าหมายหลัก: แบ่งงานชัด ไม่ทับกัน ไม่ทำซ้ำ และแบ่งทรัพยากรเครื่อง
 
 ดู [Confirmed Decisions](docs/DECISIONS.md), [MVP Contract](docs/MVP_CONTRACT.md) และ [Execution Design](docs/EXECUTION_DESIGN.md) สำหรับขอบเขต เกณฑ์ผ่าน และการออกแบบที่ implement ได้
 
 ## เป้าหมาย
 
-- ใช้งานได้กับหลาย project ไม่ผูกกับ PROJECT_VELA
+- ใช้งานได้กับหลาย project ไม่ผูกกับ project ใด project หนึ่ง
 - เชื่อม Cloud coding agents ผ่าน account/CLI ที่รองรับ โดยไม่บังคับให้ผู้ใช้จัดการ API key เอง
 - รองรับ Local LLM เช่น Ollama / llama.cpp / LM Studio หรือ adapter อื่น
 - ให้ agent คุยกันแบบมีโครงสร้าง ไม่ใช่แชร์ transcript ทั้งหมด
-- ให้ agent delegate, critique, review และแบ่งงานกันได้
+- ให้ agent delegate, critique, review และแบ่งงานกันได้ (Claude กับ Codex ถามกันระหว่างรันได้ด้วย `ask_peer`)
 - มี UI สำหรับดูสถานะ ควบคุม หยุด อนุมัติ ปฏิเสธ และเข้าแทรกแซง
 - ลด token/context ที่ส่งซ้ำโดยมี Context Broker และ Artifact references
 - แยก workspace ของ agent เพื่อลดการแก้ไฟล์ชนกัน

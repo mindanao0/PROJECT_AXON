@@ -10,7 +10,7 @@ from pathlib import Path
 
 EFFORTS = {"claude": ("low", "medium", "high", "xhigh", "max"), "codex": ("low", "medium", "high", "xhigh", "max", "ultra")}
 # Claude accepts aliases and full ids; these are suggestions, any well-formed id is passed through to the CLI.
-CLAUDE_MODELS = ("sonnet", "opus", "haiku", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001")
+CLAUDE_MODELS = ("sonnet", "opus", "haiku", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-haiku-4-5-20251001")
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,79}$")
 AGENTS = tuple(EFFORTS)
 

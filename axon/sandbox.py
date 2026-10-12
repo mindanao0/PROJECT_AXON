@@ -2,7 +2,6 @@
 
 import glob
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -61,28 +60,13 @@ def active(unit):
     return subprocess.run(["systemctl", "--user", "is-active", "--quiet", f"{unit}.scope"]).returncode == 0
 
 
-def clone(project, repo, base, branch, shared=True):
-    """Per-attempt clone sharing the project's objects (shared=False: its own, hard-linked); never a worktree (shared hooks).
+def clone(project, repo, base, branch):
+    """Per-attempt clone sharing the project's objects; never a worktree (shared hooks).
     No global git config, like inside the sandbox: user filters (e.g. git-lfs smudge) would
     otherwise make untouched files look modified to the sandboxed snapshot."""
     env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null"}
-    subprocess.run(["git", "clone", "-q", *(["--shared"] if shared else []), "--no-checkout", project, str(repo)], check=True, env=env)
+    subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", project, str(repo)], check=True, env=env)
     subprocess.run([*GIT, "-C", str(repo), "checkout", "-q", "-b", branch, base], check=True, env=env)
-
-
-def overlay(project, repo):
-    """Copy the project's working tree over a fresh clone: uncommitted and untracked files, but nothing
-    git-ignored (.env, node_modules, .claude/settings.local.json). Files deleted in the tree are deleted here."""
-    out = subprocess.run(["git", "-C", project, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-                         capture_output=True, check=True).stdout
-    for name in filter(None, out.split(b"\0")):
-        src, dst = Path(project, os.fsdecode(name)), Path(repo, os.fsdecode(name))
-        if src.is_symlink() or src.is_file():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.unlink(missing_ok=True)
-            shutil.copy2(src, dst, follow_symlinks=False)
-        elif not src.exists():
-            dst.unlink(missing_ok=True)
 
 
 def fetch(project, bundle, ref):

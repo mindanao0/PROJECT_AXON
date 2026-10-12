@@ -15,13 +15,15 @@ function liveText(task) {
 }
 const live = task => task.running_since ? `<p class="queue-hint live-hint" data-live="${escapeHTML(task.id)}">${escapeHTML(liveText(task))}</p>` : '';
 const columnLimits = [12,12,12,12];
-const names = {overview:'Control room',tasks:'Task board',agents:'Your agents',activity:'Activity log',artifacts:'Artifacts',resources:'Resources',settings:'Runtime settings',chat:'Agent chat'};
-const subtitles = {overview:'Your directives. Your agents. Your control.',tasks:'Follow each task from queue to verified result.',agents:'Slots, cooldowns and available capabilities.',activity:'Trace decisions and controls for one task or the whole runtime.',artifacts:'Full results and verification evidence, tied to their attempt.',resources:'Dispatch capacity and measured resource availability.',settings:'Local transport, reconnect and current boundaries.',chat:'Claude, Codex or a shell in the sandbox: a real terminal. Select to copy, Ctrl+Shift+V to paste.'};
+const names = {overview:'Control room',tasks:'Task board',agents:'Your agents',activity:'Activity log',artifacts:'Artifacts',resources:'Resources',settings:'Runtime settings',chat:'Agent chat',brainstorm:'Brainstorm'};
+const subtitles = {overview:'Your directives. Your agents. Your control.',tasks:'Follow each task from queue to verified result.',agents:'Slots, cooldowns and available capabilities.',activity:'Trace decisions and controls for one task or the whole runtime.',artifacts:'Full results and verification evidence, tied to their attempt.',resources:'Dispatch capacity and measured resource availability.',settings:'Local transport, reconnect and current boundaries.',chat:'Claude, Codex or a shell in the sandbox: a real terminal. Select to copy, Ctrl+Shift+V to paste.',brainstorm:'Claude and Codex plan together first. Nothing runs until you create the tasks.'};
 const terminal = ['COMPLETED','FAILED','CANCELLED','BLOCKED'];
 const active = ['RUNNING','VERIFY','REVIEW','WAITING_INPUT','WAITING_APPROVAL','CANCELLING'];
 const attentionStates = ['WAITING_INPUT','WAITING_APPROVAL','WAITING_QUOTA','BLOCKED','REVIEW'];
+// A task whose questions were merged into a Brainstorm form waits for that form, not for its own row.
+const needsYou = task => attentionStates.includes(task.state) && !task.held_by;
 const taskGroups = {all:'All tasks',active:'Active attempts',attention:'Needs attention',completed:'Completed tasks'};
-const matchesTaskGroup = (task, group=taskGroup) => group === 'all' || (group === 'active' ? active.includes(task.state) : group === 'attention' ? attentionStates.includes(task.state) : task.state === 'COMPLETED');
+const matchesTaskGroup = (task, group=taskGroup) => group === 'all' || (group === 'active' ? active.includes(task.state) : group === 'attention' ? needsYou(task) : task.state === 'COMPLETED');
 const shortID = id => (id || 'Not assigned').slice(-6).toUpperCase();
 const badge = state => `<span class="badge ${escapeHTML(state.toLowerCase().replaceAll('_','-'))}">${escapeHTML(state.replaceAll('_',' '))}</span>`;
 const date = t => new Date(t * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
@@ -121,7 +123,7 @@ async function runCommand(index) {
   else if (item.id==='dispatch') $('#pause').click();
 }
 function operatorQueue(tasks) {
-  const requests=tasks.filter(t=>t.pending||['WAITING_INPUT','WAITING_APPROVAL','REVIEW'].includes(t.state)).sort((a,b)=>a.updated_at-b.updated_at);
+  const requests=tasks.filter(t=>!t.held_by&&(t.pending||['WAITING_INPUT','WAITING_APPROVAL','REVIEW'].includes(t.state))).sort((a,b)=>a.updated_at-b.updated_at);
   if (!requests.length) return '';
   const action=t=>t.state==='REVIEW'?'Inspect diff':t.state==='WAITING_INPUT'?'Answer request':'Review request';
   return `<section class="operator-queue" aria-label="Operator response queue"><div class="panel-header"><div><span class="eyebrow">OPERATOR REQUIRED</span><h2>${requests.length} decision${requests.length===1?'':'s'} waiting</h2></div><button class="text-button" data-task-group="attention">View attention queue ↗</button></div><div class="operator-requests">${requests.slice(0,4).map(t=>`<button id="operator-task-${escapeHTML(t.id)}" class="operator-request" data-task="${escapeHTML(t.id)}"><span class="request-top"><span>NAV-${escapeHTML(shortID(t.id))}</span>${badge(t.state)}</span><strong>${escapeHTML(t.title)}</strong><span class="request-open">${action(t)} <span aria-hidden="true">↗</span></span></button>`).join('')}</div>${requests.length>4?`<small class="operator-more">+ ${requests.length-4} more in the attention queue</small>`:''}</section>`;
@@ -145,8 +147,9 @@ async function command(body) {
   catch (err) { toast(err.message); return null; }
 }
 function updateAttention(previous, result) {
+  const merged = (result.brainstorms||[]).filter(b => (b.questions||[]).some(q => q.gate)).length;  // a merged form has no task with a pending request
   const pending = result.tasks.filter(t => t.pending);
-  document.title = pending.length ? `(${pending.length} waiting) Axon — ${names[view]}` : `Axon — ${names[view]}`;
+  document.title = pending.length + merged ? `(${pending.length + merged} waiting) Axon — ${names[view]}` : `Axon — ${names[view]}`;
   if (!previous || !document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
   const known = new Set(previous.tasks.filter(t=>t.pending).map(t=>t.pending.id));
   const added = pending.filter(t=>!known.has(t.pending.id));
@@ -171,7 +174,7 @@ async function poll() {
     $('#pause').disabled = false; $('#new-task').disabled = false;
     $('#add-project').hidden = false; $('#add-project').disabled = false;
     $('#runtime-banner').classList.toggle('real-mode',!simulation());
-    $('#nav-chat').hidden = simulation();
+    $('#nav-chat').hidden = simulation(); $('#nav-brainstorm').hidden = simulation();
     $('#runtime-banner').innerHTML = simulation()
       ? '<span class="notice-icon" aria-hidden="true">◌</span><div><strong>Simulation workspace</strong><span>Fake-agent controls only. No repository files are changed.</span></div><span class="notice-badge">SIMULATION / 0.1</span>'
       : '<span class="notice-icon" aria-hidden="true">⌁</span><div><strong>Real runtime</strong><span>Controls and capabilities are provided by the active runner. Verify the task, attempt and diff before approval.</span></div><span class="notice-badge">REAL MODE</span>';
@@ -213,7 +216,7 @@ function queueHint(task) {
 }
 function stats(tasks) {
   const running = tasks.filter(t=>active.includes(t.state)).length;
-  const waiting = tasks.filter(t=>attentionStates.includes(t.state)).length;
+  const waiting = tasks.filter(needsYou).length;
   const completed = tasks.filter(t=>t.state==='COMPLETED').length;
   return `<div class="stats">
     <button type="button" id="stat-all" class="stat" data-task-group="all" aria-describedby="stat-all-value stat-all-detail" aria-label="Show all tasks"><div class="stat-top">Total tasks<span aria-hidden="true">▦</span></div><div id="stat-all-value" class="stat-value">${tasks.length}</div><div id="stat-all-detail" class="stat-footer">Across ${project==='all'?snapshot.projects.length:1} project${project==='all'&&snapshot.projects.length!==1?'s':''}</div></button>
@@ -384,11 +387,13 @@ function render() {
   } else if (view==='activity') html = `<section class="panel event-log"><div class="panel-header"><h2>Runtime events</h2><span class="muted">Cursor ${cursor} / latest 1,000 retained in this tab</span></div>${eventToolbar(tasks)}${eventList(eventLimit,eventTask,eventType)}${eventLimit<1000?'<button class="text-button" id="more-events">Show more events</button>':''}</section>`;
   else if (view==='artifacts') html = artifacts(tasks);
   else if (view==='chat') {if ($('#chat-root')) return; html = chatPanel(); chatDisconnect(); chatSession='';}
+  else if (view==='brainstorm') {if ($('#bs-root')) {bsRefresh(); updateAttention(null,snapshot); return;} html = simulation()?`<section class="panel">${empty('Not in the simulation','Brainstorm needs the real runtime and your agents.')}</section>`:brainstormPanel();}
   else if (view==='resources') html = resourcePanel()+usagePanel();
   else html = settingsPanel();
   if (view!=='chat') chatDisconnect();
   $('#content').innerHTML = html; restoreFocus(focus); updateAttention(null,snapshot); updateCountdowns();
   if (view==='chat') chatTick();
+  if (view==='brainstorm') bsRefresh();
 }
 function populateSources(selected='') {
   const projectID = $('#task-project').value;
@@ -399,7 +404,7 @@ function syncFlowRow() {
   const proj=snapshot.projects.find(x=>x.id===pid), real=!simulation();
   row.hidden=help.hidden=!real;
   if (!real) return;
-  $('#task-after').innerHTML='<option value="">No dependency</option>'+snapshot.tasks.filter(t=>t.project_id===pid&&t.kind!=='review'&&!['FAILED','CANCELLED'].includes(t.state)).map(t=>`<option value="${escapeHTML(t.id)}">${escapeHTML(t.title)} (${escapeHTML(t.state)})</option>`).join('');
+  $('#task-after').innerHTML='<option value="">No dependency</option>'+snapshot.tasks.filter(t=>t.project_id===pid&&t.kind==='task'&&!['FAILED','CANCELLED'].includes(t.state)).map(t=>`<option value="${escapeHTML(t.id)}">${escapeHTML(t.title)} (${escapeHTML(t.state)})</option>`).join('');
   const names=proj?.checks||[];
   $('#task-checks-list').innerHTML=names.length?names.map(n=>`<label class="inline-check"><input type="checkbox" name="checks" value="${escapeHTML(n)}"> ${escapeHTML(n)}</label>`).join(' '):'<span class="muted">This project has no checks.</span>';
 }
@@ -471,13 +476,14 @@ function updateDetail(force=false) {
     controls.push(`<button class="button secondary" data-action="review_with_codex" ${handoff.codex_review===true?'':'disabled title="Codex is not logged in."'}>Review with Codex</button>`);
     controls.push(`<button class="button secondary" data-action="continue_with_claude" ${handoff.claude_continue===true?'':'disabled title="Claude is not logged in."'}>Continue with Claude</button>`);
   }
-  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="apply" title="Write these changes into your project folder as uncommitted edits. Nothing is written if your own edits touch the same lines.">Apply to my folder</button>');
-  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Axon integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
+  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind==='task') controls.push('<button class="button primary" data-action="apply" title="Write these changes into your project folder as uncommitted edits. Nothing is written if your own edits touch the same lines.">Apply to my folder</button>');
+  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind==='task') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Axon integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
   if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/axon\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
   const latestReview = (task.reviews||[])[0];
-  if (!simulation()&&task.state==='COMPLETED'&&task.kind!=='review'&&latestReview&&latestReview.verdict==='changes'&&!latestReview.stale) controls.push('<button class="button primary" data-action="revise" title="Queue a bounded follow-up round that starts from this result and carries the reviewer findings.">Revise from review</button>');
+  if (!simulation()&&task.state==='COMPLETED'&&task.kind==='task'&&latestReview&&latestReview.verdict==='changes'&&!latestReview.stale) controls.push('<button class="button primary" data-action="revise" title="Queue a bounded follow-up round that starts from this result and carries the reviewer findings.">Revise from review</button>');
   let request = '';
-  if (task.pending) request = `<section class="request-box"><h3>${task.state==='WAITING_APPROVAL'?'Approval required':'Your input is needed'}</h3><p>${escapeHTML(task.pending.message)}</p><small>Expires at ${date(task.pending.expires)} / bound to the displayed attempt</small>${task.state==='WAITING_APPROVAL'?`<div class="detail-actions"><button class="button primary" data-action="approve">${simulation()?'Approve simulation':'Approve request'}</button><button class="button danger" data-action="reject">Reject</button></div>`:`${(task.pending.options||[]).length?`<div class="answer-options" role="group" aria-label="Choose an answer">${task.pending.options.map((o,i)=>`<button type="button" class="button secondary" data-answer-option="${i}">${escapeHTML(o)}</button>`).join('')}</div><p class="field-help">Or write your own answer:</p>`:''}<form id="answer-form"><label>Your answer<textarea id="task-answer" name="answer" required maxlength="2000" rows="2"></textarea></label><button class="button primary" type="submit">Send answer →</button></form>`}</section>`;
+  if (task.pending) request = `<section class="request-box"><h3>${task.state==='WAITING_APPROVAL'?'Approval required':'Your input is needed'}</h3><p>${escapeHTML(task.pending.message)}</p><small>Expires at ${date(task.pending.expires)} / bound to the displayed attempt</small>${(task.pending.questions||[]).length?multiAsk(task.pending.questions,'data-detail-ask'):''}${(task.pending.questions||[]).length&&task.state==='WAITING_INPUT'?'':task.state==='WAITING_APPROVAL'?`<div class="detail-actions"><button class="button primary" data-action="approve">${simulation()?'Approve simulation':'Approve request'}</button><button class="button danger" data-action="reject">Reject</button></div>`:`${(task.pending.options||[]).length?`<div class="answer-options" role="group" aria-label="Choose an answer">${task.pending.options.map((o,i)=>`<button type="button" class="button secondary" data-answer-option="${i}">${escapeHTML(o)}</button>`).join('')}</div><p class="field-help">Or write your own answer:</p>`:''}<form id="answer-form"><label>Your answer<textarea id="task-answer" name="answer" required maxlength="2000" rows="2"></textarea></label><button class="button primary" type="submit">Send answer →</button></form>`}</section>`;
+  else if (task.held_by) request = `<section class="request-box"><h3>Answered in Brainstorm #${escapeHTML(task.held_by)}</h3><p>This agent's questions were merged with the other agent's, so you answer them once, in the Brainstorm page.</p></section>`;
   else if (task.state==='REVIEW') request = `<section class="request-box"><h3>Approve reviewed attempt</h3><p>The runner has not supplied a separate approval question. Review the diff and verification evidence above before approving.</p><div class="detail-actions"><button class="button primary" data-action="approve">Approve attempt</button><button class="button danger" data-action="reject">Reject attempt</button></div></section>`;
   else if (task.state==='WAITING_INPUT') request = `<section class="request-box"><h3>Waiting for your input</h3><p>The runtime has not supplied the input prompt yet. Refresh the task details or inspect its event output.</p><button class="text-button" data-open-output data-task="${escapeHTML(task.id)}">Open task output ↗</button></section>`;
   const reviewItems = (task.reviews||[]).map(r=>`<li><strong>${r.verdict==='approve'?'Approved':'Changes requested'}</strong> by ${escapeHTML(r.reviewer)}${r.reviewer===r.implementer?' (same agent as the implementer)':''}${r.stale?' / reviewed an older result, not this commit':''}<br><span class="muted">${String(r.summary||'').split('\n').map(escapeHTML).join('<br>')}</span></li>`).join('');
@@ -521,7 +527,12 @@ async function copyText(text) {
 }
 document.addEventListener('click',async e=>{
   const close = e.target.closest('[data-close]'); if (close) {document.getElementById(close.dataset.close).close();return;}
-  const chatKey=e.target.closest('[data-chat-key]'); if (chatKey) {if (chatSocket?.readyState===1) chatSocket.send(JSON.stringify({data:chatKeys[Number(chatKey.dataset.chatKey)][0]})); chatTerm?.focus(); return;}
+  const chatKey=e.target.closest('[data-chat-key]'); if (chatKey) {if (chatSocket?.readyState===1) chatSocket.send(JSON.stringify({data:(k=>typeof k==='function'?k():k)(chatKeys[Number(chatKey.dataset.chatKey)][0])})); chatTerm?.focus(); return;}
+  const fill=e.target.closest('[data-ask-fill]'); if (fill) {const box=fill.closest('fieldset').querySelector('textarea'); box.value=fill.dataset.text; box.focus(); return;}
+  const bsOpt=e.target.closest('[data-bs-opt]'); if (bsOpt) {bsOpt.disabled=true; await bsAnswer(bsOpt.dataset,bsOpt.dataset.text); bsOpt.disabled=false; return;}
+  const bsCreate=e.target.closest('[data-bs-create]'); if (bsCreate) {bsCreate.disabled=true; const r=await command({action:'brainstorm_create_tasks',brainstorm_id:bsCreate.dataset.bsCreate}); if (r) toast(`Queued ${Object.keys(r.task_ids).length} tasks.`); else bsCreate.disabled=false; return;}
+  const bsStop=e.target.closest('[data-bs-stop]'); if (bsStop) {if (confirm('Stop this brainstorm? Its agents stop; nothing is created.')) await command({action:'brainstorm_stop',brainstorm_id:bsStop.dataset.bsStop}); return;}
+  if (e.target.closest('#bs-recommend')) {bsRecommend(); return;}
   const chatTab=e.target.closest('[data-chat-tab]'); if (chatTab) {chatConnect(chatTab.dataset.chatTab).then(chatTick);return;}
   const chatX=e.target.closest('[data-chat-close]'); if (chatX) {
     if (confirm(`Close chat ${chatTitle(chatX.dataset.chatClose)}? The agent stops; its project clone is kept.`)) {try {await chatApi({action:'chat_close',session:chatX.dataset.chatClose}); chatTick();} catch (err) {toast(err.message);}}
@@ -591,7 +602,19 @@ document.addEventListener('click',async e=>{
   }
 });
 $('#detail-dialog').addEventListener('close',()=>{selectedTask=null;taskDetail=null;detailSignature='';});
-$('#add-project').onclick = ()=>{if(!connected)return;$('#project-form').reset();$('#project-form .form-error').textContent='';$('#project-description').textContent=simulation()?'Creates a simulation-only project.':'Add a project through the active runtime. Repository access is granted only by that runtime.';$('#project-path-field').hidden=simulation();$('#project-dialog').showModal();};
+$('#add-project').onclick = ()=>{if(!connected)return;$('#project-form').reset();$('#project-form .form-error').textContent='';$('#project-description').textContent=simulation()?'Creates a simulation-only project.':'Add a project through the active runtime. Repository access is granted only by that runtime.';$('#project-path-field').hidden=simulation();$('#folder-picker').hidden=true;$('#project-dialog').showModal();};
+async function browse(path){
+  try{
+    const r=await api('/api/command',{action:'browse_dir',path});
+    $('#picker-path').textContent=r.path;$('#picker-path').dataset.path=r.path;$('#picker-up').disabled=!r.parent;$('#picker-up').dataset.path=r.parent||'';
+    $('#picker-note').textContent=r.git?'Git repository':'Not a Git repository root';$('#picker-use').disabled=!r.git;
+    $('#picker-list').innerHTML=r.dirs.map(d=>`<li><button type="button" data-dir="${escapeHTML(d.name)}">${escapeHTML(d.name)}${d.git?'<span class="badge">GIT</span>':''}</button></li>`).join('')||'<li class="muted" style="padding:8px 12px">No subfolders</li>';
+  }catch(err){$('#project-form .form-error').textContent=err.message;}
+}
+$('#browse-path').onclick = ()=>{$('#folder-picker').hidden=false;browse($('#project-form [name=path]').value.trim());};
+$('#picker-up').onclick = e=>browse(e.currentTarget.dataset.path);
+$('#picker-list').onclick = e=>{const b=e.target.closest('[data-dir]');if(b)browse($('#picker-path').dataset.path.replace(/\/$/,'')+'/'+b.dataset.dir);};
+$('#picker-use').onclick = ()=>{const f=$('#project-form'),p=$('#picker-path').dataset.path;f.path.value=p;if(!f.name.value)f.name.value=p.split('/').pop().replace(/[^A-Za-z0-9._-]/g,'-').replace(/^[._-]+/,'').slice(0,60);$('#folder-picker').hidden=true;};
 $('#refresh').onclick = ()=>poll();
 $('#pause').onclick = async ()=>{if(!snapshot)return;const result=await command({action:snapshot.paused?'resume':'pause'});if(result)toast(snapshot.paused?'Dispatch paused. Active attempts continue.':'Dispatch resumed.');};
 $('#notifications').hidden = !('Notification' in window);
@@ -636,7 +659,8 @@ $('#content').addEventListener('submit',async e=>{
 $('#task-detail').addEventListener('submit',async e=>{
   e.preventDefault();const form=e.target,button=form.querySelector('[type="submit"]');if(!button)return;
   button.disabled=true;const task=currentTask();if(!task)return;
-  const result=await taskCommand(form.id==='answer-form'?'answer':'instruction',{text:new FormData(form).get(form.id==='answer-form'?'answer':'instruction'),pending_id:task.pending?.id});
+  const multi=form.classList.contains('multi-ask'), kind=multi||form.id==='answer-form'?'answer':'instruction';
+  const result=await taskCommand(kind,{text:multi?multiAnswerText(form):new FormData(form).get(kind),pending_id:task.pending?.id});
   if(result){toast('Saved for this attempt.');form.reset();}button.disabled=false;
 });
 $('#content').addEventListener('input',e=>{if(e.target.id==='task-search'){search=e.target.value;render();}});
@@ -671,13 +695,84 @@ document.addEventListener('keydown',e=>{
   else if (/^[1-7]$/.test(e.key)&&snapshot) {e.preventDefault();navigateView(Object.keys(names)[Number(e.key)-1]);$('#page-title').focus({preventScroll:true});}
 });
 
+// Brainstorm: Claude and Codex ask you, plan alone, compare, merge and check; the plan becomes tasks only when you press the button.
+const bsPhases = ['clarify','draft','compare','merge','check','ready'];
+// Heavy = draft, compare, merge; light = the steps that only ask and check.
+const bsRecommended = {claude:{model:'claude-opus-5-5',effort:'high',light_model:'claude-sonnet-5-5',light_effort:'medium'},codex:{model:'gpt-6-astra',effort:'high',light_model:'gpt-6.1-sol',light_effort:'medium'}};
+const bsAgentName = a => ({claude:'Claude Code',codex:'Codex'}[a]||a);
+function bsFields(role,label,agent) {
+  const models=((snapshot.agent_options||{})[agent]||{}).models||[];
+  return `<fieldset><legend>${label}</legend><div class="form-row">${[['model','Model'],['effort','Effort'],['light_model','Model, asking and checking'],['light_effort','Effort, asking and checking']].map(([k,l])=>`<label>${l}<input name="${role}_${k}" ${k.endsWith('model')?`list="bs-models-${escapeHTML(agent)}"`:''} maxlength="80" placeholder="default" autocomplete="off"></label>`).join('')}</div></fieldset>`;
+}
+function brainstormPanel() {
+  const agents=['claude','codex'], opts=sel=>agents.map(a=>`<option value="${a}" ${a===sel?'selected':''}>${bsAgentName(a)}</option>`).join('');
+  const lists=agents.map(a=>`<datalist id="bs-models-${a}">${(((snapshot.agent_options||{})[a]||{}).models||[]).map(m=>`<option value="${escapeHTML(m)}">`).join('')}</datalist>`).join('');
+  return `<section class="panel" id="bs-root"><form id="bs-start"><label>Project<select name="project_id">${snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${project===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('')}</select></label><label>Goal<textarea name="goal" required maxlength="8000" rows="4" placeholder="What should be built or changed? The agents ask you whatever they need to know; they never guess."></textarea></label><div class="form-row"><label>Lead: asks first, writes the merged plan<select name="lead">${opts('claude')}</select></label><label>Other: second planner, checks the plan<select name="other">${opts('codex')}</select></label></div><details><summary>Model and effort for this brainstorm</summary>${bsFields('lead','Lead','claude')}${bsFields('other','Other','codex')}${lists}<button class="button secondary" type="button" id="bs-recommend">Fill in the suggested values for these two agents</button><p class="muted">Blank = your Agents settings. Model and effort for the main steps (draft, compare, merge) and for the light ones (asking, checking).</p></details><p class="muted">Both agents work read-only: they ask you questions, each drafts a plan alone, they compare, one merges, the other checks. About 7 short runs per agent, more if they ask more. Nothing is built until you create the tasks from the finished plan.</p><p class="form-error" role="alert"></p><button class="button primary" type="submit">Start brainstorm</button></form></section><div id="bs-list"></div>`;
+}
+function bsRecommend() {
+  const f=$('#bs-start'); if (!f) return;
+  for (const role of ['lead','other']) { const r=bsRecommended[f[role].value]||{}; for (const [k,v] of Object.entries(r)) f[`${role}_${k}`].value=v; }
+}
+// Several questions in one ask: each has its own choices (a click fills its box) and a box to type in; one send for all.
+function multiAsk(qs, attrs) {
+  return `<form class="multi-ask" ${attrs}>${qs.map((q,i)=>`<fieldset class="ask-q"><legend>${i+1}) ${escapeHTML(q.question)}</legend>${(q.from||[]).length?`<details class="ask-from"><summary>asked by ${(q.from||[]).length>1?'both agents':'one agent'}: the original wording</summary><ul>${q.from.map(x=>`<li>${escapeHTML(x)}</li>`).join('')}</ul></details>`:''}${(q.options||[]).length?`<div class="answer-options" role="group" aria-label="Choices for question ${i+1}">${q.options.map(o=>`<button type="button" class="button secondary" data-ask-fill data-text="${escapeHTML(o)}">${escapeHTML(o)}</button>`).join('')}</div>`:''}<textarea name="a${i}" required maxlength="450" rows="2" aria-label="Your answer to question ${i+1}"></textarea></fieldset>`).join('')}<button class="button primary" type="submit">Send all answers →</button></form>`;
+}
+const multiAnswerText = form => [...form.querySelectorAll('textarea')].map((t,i)=>`${i+1}) ${t.value.trim()}`).join('\n');
+function brainstormCard(b) {
+  const at=bsPhases.indexOf(b.phase), plan=b.plan;
+  const steps=bsPhases.map((p,i)=>`<li class="${i===at?'current':i<at?'past':''}">${p}</li>`).join('');
+  const collecting=b.collecting?'<p class="muted">Collecting questions from both agents, so that you answer each thing once …</p>':'';
+  const asks=collecting+(b.questions||[]).map(q=>{const d=`data-q-task="${escapeHTML(q.task_id)}" data-q-attempt="${escapeHTML(q.attempt_id)}" data-q-pending="${escapeHTML(q.pending_id)}"`;
+    if (q.gate) return `<section class="request-box"><h3>Both agents ask you (their questions merged: each thing once)</h3>${multiAsk(q.questions,`data-q-gate="${escapeHTML(b.id)}"`)}</section>`;
+    if ((q.questions||[]).length) return `<section class="request-box"><h3>${escapeHTML(bsAgentName(q.agent))} asks you</h3>${multiAsk(q.questions,d)}</section>`;
+    return `<section class="request-box"><h3>${escapeHTML(bsAgentName(q.agent))} asks you</h3><p>${escapeHTML(q.question)}</p>${(q.options||[]).length?`<div class="answer-options" role="group" aria-label="Choose an answer">${q.options.map(o=>`<button type="button" class="button secondary" data-bs-opt ${d} data-text="${escapeHTML(o)}">${escapeHTML(o)}</button>`).join('')}</div><p class="field-help">Or write your own answer:</p>`:''}<form class="bs-answer" ${d}><textarea name="text" data-bs-text="${escapeHTML(q.task_id)}" required maxlength="2000" rows="2" aria-label="Your answer"></textarea><button class="button primary" type="submit">Send answer →</button></form></section>`;}).join('');
+  const qa=(b.qa||[]).length?`<details><summary>Your answers so far (${b.qa.length})</summary><ul class="queue-reasons">${b.qa.map(x=>`<li><strong>${escapeHTML(bsAgentName(x.by))}</strong> asked: ${escapeHTML(x.q)}<br><span class="muted">${escapeHTML(x.a)}</span></li>`).join('')}</ul></details>`:'';
+  let body='';
+  if (plan) {
+    const made=b.created||{};
+    body=`<p>${escapeHTML(plan.summary||'')}</p><table class="usage-table"><thead><tr><th>Task</th><th>Agent</th><th>Proposed by</th><th>Scope</th><th>After</th></tr></thead><tbody>${plan.tasks.map(t=>`<tr><td><strong>${escapeHTML(t.id)}</strong> ${escapeHTML(t.title)}<br><details><summary>What the agent will be given</summary><pre class="bs-brief">${escapeHTML(t.brief||t.spec||'')}</pre></details></td><td>${escapeHTML(t.agent)}</td><td><span class="badge">${escapeHTML(t.by||'?')}</span></td><td>${escapeHTML((t.scope||[]).join(', '))}</td><td>${escapeHTML(t.after||'')}${made[t.id]?` <button class="text-button" data-task="${escapeHTML(made[t.id])}">task ${escapeHTML(made[t.id])} ↗</button>`:''}</td></tr>`).join('')}</tbody></table>`;
+    if ((plan.disagreements||[]).length) body+=`<h3>They disagree: you decide</h3><ul class="queue-reasons">${plan.disagreements.map(x=>`<li><strong>${escapeHTML(x.topic)}</strong><br>Claude: ${escapeHTML(x.claude)}<br>Codex: ${escapeHTML(x.codex)}</li>`).join('')}</ul>`;
+    if ((plan.risks||[]).length) body+=`<h3>Risks</h3><ul class="queue-reasons">${plan.risks.map(r=>`<li>${escapeHTML(r)}</li>`).join('')}</ul>`;
+    if (b.objections) body+=`<div class="review-callout"><strong>The checker still objects</strong><span>${escapeHTML(b.objections).replaceAll('\n','<br>')}</span></div>`;
+  }
+  const act=b.status==='READY'?`<button class="button primary" data-bs-create="${escapeHTML(b.id)}">Create these ${plan.tasks.length} tasks</button>`:b.status==='ACTIVE'?`<button class="button danger" data-bs-stop="${escapeHTML(b.id)}">Stop</button>`:'';
+  return `<section class="panel bs-card"><div class="panel-header"><h2>#${escapeHTML(b.id)} ${escapeHTML(b.goal.trim().split('\n')[0].slice(0,120))}</h2>${badge(b.status)}</div><p class="muted">${escapeHTML(b.project_id)} / lead ${escapeHTML(bsAgentName(b.agents.lead))}, other ${escapeHTML(bsAgentName(b.agents.other))}</p><ol class="bs-steps" aria-label="Phase">${steps}</ol>${b.why?`<p class="form-error">${escapeHTML(b.why)}</p>`:''}${asks}${qa}${body}<div class="detail-actions">${act}</div></section>`;
+}
+function bsRefresh() {
+  const list=$('#bs-list'); if (!list) return;
+  const items=(snapshot.brainstorms||[]).filter(b=>project==='all'||b.project_id===project), sig=JSON.stringify(items);
+  if (list.dataset.sig===sig) return;
+  const typed=Object.fromEntries([...list.querySelectorAll('[data-bs-text]')].map(t=>[t.dataset.bsText,t.value]));
+  list.dataset.sig=sig; list.innerHTML=items.map(brainstormCard).join('')||`<section class="panel">${empty('No brainstorms yet','Start one above.')}</section>`;
+  list.querySelectorAll('[data-bs-text]').forEach(t=>{t.value=typed[t.dataset.bsText]||'';});
+}
+async function bsAnswer(d,text) {
+  const r=await command({action:'answer',task_id:d.qTask,attempt_id:d.qAttempt,pending_id:d.qPending,text}); if (r) toast('Answer sent.');
+}
+$('#content').addEventListener('submit', async e => {
+  if (e.target.id==='bs-start') {
+    e.preventDefault(); const button=e.target.querySelector('[type="submit"]'), err=e.target.querySelector('.form-error'); button.disabled=true; err.textContent='';
+    try {const r=await api('/api/command',{action:'brainstorm_start',...Object.fromEntries(new FormData(e.target))}); e.target.goal.value=''; toast(`Brainstorm ${r.brainstorm_id} started.`); await poll();}
+    catch (x) {err.textContent=x.message;} finally {button.disabled=false;}
+  } else if (e.target.classList?.contains('multi-ask') && e.target.dataset.qGate) {
+    e.preventDefault(); const button=e.target.querySelector('[type="submit"]'); button.disabled=true;
+    const r=await command({action:'brainstorm_answer',brainstorm_id:e.target.dataset.qGate,answers:[...e.target.querySelectorAll('textarea')].map(t=>t.value.trim())});
+    if (r) toast('Answers sent to both agents.'); else button.disabled=false;
+  } else if (e.target.classList?.contains('multi-ask') && e.target.dataset.qTask) {
+    e.preventDefault(); const button=e.target.querySelector('[type="submit"]'); button.disabled=true; await bsAnswer(e.target.dataset,multiAnswerText(e.target)); button.disabled=false;
+  } else if (e.target.classList?.contains('bs-answer')) {
+    e.preventDefault(); const box=e.target.querySelector('textarea'); await bsAnswer(e.target.dataset,box.value.trim()); box.value='';
+  }
+});
 // Chat: a real terminal (xterm.js, loaded on first use) on the agent's tmux session over a WebSocket.
 let chatSession = '', chatTerm = null, chatFit = null, chatSocket = null, chatLoading = null;
 // For phones and keys the browser keeps: each button types its terminal sequence.
-const chatKeys = [['\x1b','Esc'],['\t','Tab'],['\x1b[Z','⇧Tab'],['\x1b[A','↑'],['\x1b[B','↓'],['\x1b[D','←'],['\x1b[C','→'],['\x1b[1;2A','⇧↑'],['\x1b[1;2B','⇧↓'],['\x1b[1;2D','⇧←'],['\x1b[1;2C','⇧→'],['\r','Enter'],['\n','New line'],['\x03','Ctrl-C'],['\x04','Ctrl-D']];
+// A wheel click in the middle of the terminal: apps like Codex ignore one at the corner (1,1).
+const chatWheel = up => `\x1b[<${up?64:65};${(chatTerm?.cols||80)>>1};${(chatTerm?.rows||24)>>1}M`;
+const chatKeys = [['\x1b','Esc'],['\t','Tab'],['\x1b[Z','⇧Tab'],['\x1b[A','↑'],['\x1b[B','↓'],['\x1b[D','←'],['\x1b[C','→'],['\x1b[1;2A','⇧↑'],['\x1b[1;2B','⇧↓'],['\x1b[1;2D','⇧←'],['\x1b[1;2C','⇧→'],['\r','Enter'],['\n','New line'],[()=>chatWheel(true),'Scroll ▲'],[()=>chatWheel(false),'Scroll ▼'],['\x03','Ctrl-C'],['\x04','Ctrl-D']];
 const chatApi = body => api('/api/command', body);
 function chatPanel() {
-  return `<section class="panel" id="chat-root"><form id="chat-start" class="chat-bar"><select name="project_id" aria-label="Project">${snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${project===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('')}</select><select name="agent" aria-label="Agent"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="shell">Shell (bash in the sandbox)</option></select><input name="label" maxlength="20" pattern="[A-Za-z0-9]{1,20}" placeholder="name (optional)" aria-label="Chat name, optional; a new name opens a separate chat"><button class="button primary" type="submit">Start or open chat</button></form><div id="chat-tabs" class="chat-tabs" role="tablist" aria-label="Running chats"></div><div id="chat-term" class="chat-term" aria-label="Agent terminal. Typing here goes to the agent.">Start a chat, or pick a running one.</div><div class="chat-bar chat-keys">${chatKeys.map(([,l],i)=>`<button class="button secondary" type="button" data-chat-key="${i}">${l}</button>`).join('')}<button class="button secondary" type="button" id="chat-attach">Image…</button><input id="chat-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div><p class="muted chat-hint">Click the terminal and type, as in any terminal. Drag to select = copy; Ctrl+Shift+V = paste; the wheel scrolls back. Paste or drop an image to attach it. Each chat runs in its own sandboxed clone of the project; your checkout is never touched. From a terminal: <code>axon chat</code>.</p></section>`;
+  return `<section class="panel" id="chat-root"><form id="chat-start" class="chat-bar"><select name="project_id" aria-label="Project">${snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${project===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('')}</select><select name="agent" aria-label="Agent"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="shell">Shell (bash)</option></select><input name="label" maxlength="20" pattern="[A-Za-z0-9]{1,20}" placeholder="name (optional)" aria-label="Chat name, optional; a new name opens a separate chat"><button class="button primary" type="submit">Start or open chat</button></form><div id="chat-tabs" class="chat-tabs" role="tablist" aria-label="Running chats"></div><div id="chat-term" class="chat-term" aria-label="Agent terminal. Typing here goes to the agent.">Start a chat, or pick a running one.</div><div class="chat-bar chat-keys">${chatKeys.map(([,l],i)=>`<button class="button secondary" type="button" data-chat-key="${i}">${l}</button>`).join('')}<button class="button secondary" type="button" id="chat-attach">Image…</button><input id="chat-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div><p class="muted chat-hint">Click the terminal and type, as in any terminal. Drag to select = copy; Ctrl+Shift+V = paste; the wheel scrolls back. Paste or drop an image to attach it. Chats are not sandboxed: the agent runs as you, in the project folder itself. Swipe the terminal (or use Scroll ▲▼) to go back through the history. From a terminal: <code>axon chat</code>.</p></section>`;
 }
 const chatTitle = n => n.replace(/^axon-chat-/, '');
 function chatTabs(sessions) {
@@ -698,6 +793,13 @@ function loadScript(src) {
   return new Promise((ok, fail) => {const s=document.createElement('script'); s.src=src; s.onload=ok; s.onerror=()=>fail(new Error(`Could not load ${src}`)); document.head.append(s);});
 }
 function chatDisconnect() {const ws=chatSocket; chatSocket=null; ws?.close(); chatTerm?.dispose(); chatTerm=null;}
+// On a phone the box fits ~40 columns and the agent's UI cuts its lines short. Keep at least 80 columns
+// and let the box pan sideways (a horizontal swipe), the way a desktop terminal would just be wider.
+const chatNarrow = matchMedia('(max-width: 700px)'), CHAT_MIN_COLS = 80;
+function chatFitTo(term) {
+  const d = chatFit.proposeDimensions();
+  if (d) term.resize(Math.max(d.cols, CHAT_MIN_COLS), d.rows);
+}
 async function chatConnect(name) {
   const box = $('#chat-term'); if (!box) return;
   if (name === chatSession && chatSocket) return;
@@ -709,15 +811,15 @@ async function chatConnect(name) {
   } catch (err) {chatLoading=null; box.textContent=err.message; return;}
   if (chatSession !== name || chatSocket) return;  // switched again while loading
   box.textContent = '';
-  const term = chatTerm = new Terminal({fontSize:13, cursorBlink:true, scrollback:0, macOptionIsMeta:true, fontFamily:'ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace', theme:{background:'#050505', foreground:'#e6e6e6', cursor:'#ff3b3b', selectionBackground:'#ff3b3b55'}});
-  chatFit = new FitAddon.FitAddon(); term.loadAddon(chatFit); term.open(box); chatFit.fit();
+  const term = chatTerm = new Terminal({fontSize:chatNarrow.matches?11:13, cursorBlink:true, scrollback:0, macOptionIsMeta:true, fontFamily:'ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace', theme:{background:'#050505', foreground:'#e6e6e6', cursor:'#ff3b3b', selectionBackground:'#ff3b3b55'}});
+  chatFit = new FitAddon.FitAddon(); term.loadAddon(chatFit); term.open(box); chatFitTo(term);
   // tmux sends what you select with the mouse as OSC 52; put it on the system clipboard like a desktop terminal.
   term.parser.registerOscHandler(52, data => {
     const b64 = data.slice(data.indexOf(';') + 1);
     if (b64 && b64 !== '?') try {navigator.clipboard?.writeText(new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)))).catch(()=>{});} catch (_) {/* not base64 */}
     return true;
   });
-  new ResizeObserver(()=>{if (chatTerm===term) chatFit.fit();}).observe(box);
+  new ResizeObserver(()=>{if (chatTerm===term) chatFitTo(term);}).observe(box);
   const ws = chatSocket = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/api/chat/ws?session=${encodeURIComponent(name)}`);
   ws.binaryType = 'arraybuffer';
   const send = msg => {if (ws.readyState===1) ws.send(JSON.stringify(msg));};
@@ -749,6 +851,43 @@ $('#content').addEventListener('paste', e => {
   const f=[...(e.clipboardData?.files||[])].find(x=>x.type.startsWith('image/'));
   if (f && e.target.closest('#chat-term')) {e.preventDefault(); e.stopPropagation(); chatUpload(f);}
 }, true);
+// A swipe on the terminal is the wheel: xterm does not turn touch into scrolling, tmux scrolls its history on the wheel.
+// Finger distance -> wheel clicks, with momentum after the finger lifts (like a phone's own scrolling).
+const CHAT_PX_PER_CLICK = 16;  // smaller = the text moves further per swipe
+let chatTouchX = 0, chatTouchY = null, chatTouchT = 0, chatVel = 0, chatPx = 0, chatFling = 0;
+function chatScrollBy(dy) {  // dy > 0: finger down = back in time
+  chatPx += dy;
+  const n = Math.trunc(chatPx / CHAT_PX_PER_CLICK);
+  if (!n || chatSocket?.readyState !== 1) return;
+  chatPx -= n * CHAT_PX_PER_CLICK;
+  chatSocket.send(JSON.stringify({data: chatWheel(n > 0).repeat(Math.min(Math.abs(n), 12))}));
+}
+$('#content').addEventListener('touchstart', e => {
+  cancelAnimationFrame(chatFling); chatVel = chatPx = 0;
+  chatTouchY = e.target.closest('#chat-term') ? e.touches[0].clientY : null; chatTouchX = e.touches[0].clientX; chatTouchT = e.timeStamp;
+}, {passive:true});
+$('#content').addEventListener('touchmove', e => {
+  if (chatTouchY === null) return;
+  const y = e.touches[0].clientY, dt = Math.max(1, e.timeStamp - chatTouchT);
+  if (Math.abs(e.touches[0].clientX - chatTouchX) > Math.abs(y - chatTouchY) + 6) {chatTouchY = null; return;}  // sideways: the browser pans the box
+  chatVel = 0.7 * chatVel + 0.3 * (y - chatTouchY) / dt;  // px per ms, smoothed
+  chatScrollBy(y - chatTouchY); chatTouchY = y; chatTouchT = e.timeStamp;
+  e.preventDefault();
+}, {passive:false});
+function chatTouchEnd(e) {
+  if (chatTouchY === null) return;
+  chatTouchY = null;
+  if (e.timeStamp - chatTouchT > 100) return;  // held still before lifting: no fling
+  let last = performance.now();
+  const glide = now => {
+    const dt = now - last; last = now;
+    chatScrollBy(chatVel * dt); chatVel *= Math.pow(0.95, dt / 16);
+    if (Math.abs(chatVel) > 0.03) chatFling = requestAnimationFrame(glide);
+  };
+  chatFling = requestAnimationFrame(glide);
+}
+$('#content').addEventListener('touchend', chatTouchEnd, {passive:true});
+$('#content').addEventListener('touchcancel', chatTouchEnd, {passive:true});
 $('#content').addEventListener('dragover', e => {if (e.target.closest('#chat-term')) e.preventDefault();});
 $('#content').addEventListener('drop', e => {if (e.target.closest('#chat-term')) {e.preventDefault(); chatUpload([...e.dataTransfer.files].find(x=>x.type.startsWith('image/')));}});
 setInterval(chatTick, 3000);

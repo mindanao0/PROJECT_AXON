@@ -13,6 +13,8 @@ D-012: Python ≥ 3.11 ใช้ stdlib ก่อน
 D-015: Browser UI ที่ Axon serve เอง (`axon/web`: HTML/CSS/JS ไม่มี framework หรือ build step, xterm.js สำหรับหน้า Chat) เปิดด้วย `python3 -m axon`
 ไม่ทำ desktop wrapper (Tauri/Electron/Flutter) จนกว่าจะมีความต้องการที่ browser ทำไม่ได้ เช่น tray icon หรือ notification ของระบบ (Phase 5 ยังไม่พบ use case)
 
+**แก้ 2026-10-08 (D-033):** ผู้ใช้ต้องการแอปมือถือ native จริง (ไม่ใช่เว็บ/PWA/WebView) → ทำ Flutter แอปแยกใน `mobile/` ต่อ API เดิม; browser UI ยังอยู่ ดู [MOBILE.md](MOBILE.md)
+
 ## OD-003 Runtime transport — RESOLVED
 
 D-016:
@@ -48,7 +50,7 @@ D-018: ใช้โหมด noninteractive แบบมีโครงสร้
 ## OD-007 Worktree strategy — RESOLVED
 
 D-019: clone ต่อ attempt ด้วย `git clone --shared --no-checkout` แล้ว checkout branch `axon/<task>/<n>` จาก base (`sandbox.clone`) ไม่ใช้ worktree เพราะ worktree แชร์ `.git/config` และ `.git/hooks` กับ checkout หลัก ผลกลับเข้า repo หลักเป็น bundle ที่ `refs/axon/attempts/<id>` และลบ clone เมื่อ attempt จบ; ผล probe อยู่ใน [Execution Design](EXECUTION_DESIGN.md) §4
-ยังต้องวัด overhead กับ VELA จริง (checkout ประมาณ 482 MB ต่อ clone) ซึ่งเป็นงานวัดผล ไม่ใช่คำตัดสินที่ค้าง
+ยังต้องวัด overhead กับ project จริงขนาดใหญ่ (ที่วัดแล้วคือ VELA) (checkout ประมาณ 482 MB ต่อ clone) ซึ่งเป็นงานวัดผล ไม่ใช่คำตัดสินที่ค้าง
 
 ## OD-008 Who can merge — RESOLVED
 
@@ -61,7 +63,7 @@ D-014: ผู้ใช้เป็นผู้สั่ง; Runtime รวมง
 D-028: ยังไม่สร้าง Context Broker
 **หลักฐานจาก Phase 3 ([PHASE3.md](PHASE3.md)):** prompt ที่ Axon ส่งเป็นเพียง ~1–4% ของ input tokens ในงานเล็ก (CLI อ่านไฟล์เองและ overhead ของ CLI ครองส่วนใหญ่) ลดได้มากสุดเท่านั้น
 
-กลับมาดูเมื่อ: `axon-cli usage` กับงาน VELA จริงแสดงว่า PROMPT KB เป็นสัดส่วนสำคัญของ IN TOK (ราว 20% ขึ้นไป)
+กลับมาดูเมื่อ: `axon-cli usage` กับงานจริงแสดงว่า PROMPT KB เป็นสัดส่วนสำคัญของ IN TOK (ราว 20% ขึ้นไป)
 เมื่อสร้าง ให้เริ่มจาก deterministic Git/file retrieval (เลือกไฟล์จาก diff/scope) ไม่เริ่มจาก search index, embeddings หรือระบบ memory ที่ซับซ้อน แล้ววัดซ้ำด้วย `axon-cli usage`
 
 ## OD-010 Project configuration format — RESOLVED
@@ -132,7 +134,7 @@ D-030: เข้าจากเครื่องอื่นผ่าน Tailsc
 ช่องว่างที่รู้แล้ว (ต้องทำก่อนใช้จากมือถือเป็นประจำ):
 1. ทุกเครื่องที่ล็อกอินได้ session token เดียวกันต่อการรัน server ตัดสิทธิ์ทีละเครื่องไม่ได้ ต้องรีสตาร์ท Axon ซึ่งตัดทุกเครื่องพร้อมกัน และการเปลี่ยนรหัสผ่านไม่ทำให้ session เดิมหลุด → เพิ่ม token แยกต่อเครื่องที่เพิกถอนได้
 2. ไม่มีระดับสิทธิ์: ล็อกอินแล้วทำได้ทุกอย่างรวมถึง Chat ที่มีเน็ต
-3. หน้าจอยังไม่ได้ออกแบบสำหรับมือถือ
+3. หน้าจอยังไม่ได้ออกแบบสำหรับมือถือ → ตอบด้วยแอป native ([MOBILE.md](MOBILE.md)) ไม่ใช่การปรับ browser UI
 
 ## OD-016 Persistent agent relationships — RESOLVED
 
@@ -149,8 +151,11 @@ D-031: session ต่อ attempt สำหรับงาน (task) ตามท
 D-032: ไม่สร้างระบบ Team/Debate; ใช้วงจร implement → review → revise ที่มีอยู่ (จำกัดรอบด้วย `limits.review_rounds`, ค่าเริ่มต้น 2) และผู้ใช้เป็นคนตัดสิน approve/reject
 **หลักฐานจาก Phase 5 ([PHASE5.md](PHASE5.md)):** ลองวัด proposal → critique → implement กับ direct บนงานที่ spec มีกฎละเอียด: ผลต่างเห็นเฉพาะ semver (direct ล้ม 2/2, debate ผ่าน 1 และอีกรอบค้าง) ในราคา ~3× เวลา/token และ 2 จาก 6 รอบค้างรออนุมัติ
 
+D-034 เพิ่มแค่การถามตอบระหว่าง Claude กับ Codex (`ask_peer`, ถามทีละข้อ ไม่มีรอบ proposal/critique และไม่มีการลงคะแนน) ไม่ใช่ Debate
+D-035 (Brainstorm) เป็นการวางแผนก่อนลงมือ ไม่ใช่ Debate เรื่องโค้ด: อ่านอย่างเดียว ไม่โหวต และผู้ใช้กดสร้างงานและตัดสินข้อที่เห็นไม่ตรงกันเอง จึงยังเข้ากับเงื่อนไข "verifier + ผู้ใช้ตัดสิน" ด้านล่าง ต้นทุนประมาณ 7 รันสั้นต่อฝั่ง (มากกว่านั้นถ้า agent ถามผู้ใช้เพิ่ม); ยังไม่ได้วัดคุณภาพเทียบกับสั่งงานตรง ๆ
+
 ถ้าจะสร้างในอนาคต: ใช้ verifier (checks ของ project) เป็นตัวตัดสินหลัก และส่งให้ผู้ใช้ตัดสินเมื่อไม่ลงตัว ห้ามใช้ majority vote อย่างเดียว
-กลับมาดูเมื่อ: งาน VELA จริงล้มเป็นประจำในแบบที่ review → revise แก้ไม่ได้
+กลับมาดูเมื่อ: งานจริงล้มเป็นประจำในแบบที่ review → revise แก้ไม่ได้
 
 ## OD-018 First supported platforms — RESOLVED
 
@@ -173,7 +178,9 @@ D-002: Linux first ยืนยันแล้ว ระบบอื่นเป
 **Axon เทียบกับเงื่อนไข (ตรวจกับโค้ด 2026-10-08; ไม่ใช่คำวินิจฉัยทางกฎหมาย)**
 - สอดคล้อง: เรียก binary ทางการด้วย login ของผู้ใช้เอง (login ทำผ่าน `claude auth login` / `codex login` ใน agent home แยก), ไม่ scrape เว็บ, 1 slot ต่อ provider (D-009), rate limit เป็น WAITING_QUOTA พร้อม backoff, ใช้คนเดียวบนเครื่องส่วนตัว
 - **แก้แล้ว:** เดิม `usage.claude_limits` อ่าน OAuth token จาก `.credentials.json` แล้วยิง `api.anthropic.com/api/oauth/usage` (endpoint ไม่เปิดเผย) เอง ซึ่งเข้าข่าย "collect/intermediate credentials" ตอนนี้ลบแล้ว: แถบ quota ของ Claude อ่านจาก `rate_limit_event.unifiedWindows` ที่ `claude` ส่งใน stream ของตัวเอง (Runner เขียนลง `claude-limits.json` หลังแต่ละ attempt; ตรวจกับ CLI จริง 2026-10-08) Axon ไม่แตะ token ของ Claude อีก ฝั่ง Codex อ่านไฟล์ session ในเครื่องที่ Codex เขียนเองอยู่แล้ว
-- **เคยเทา → ลดแล้ว:** `claude -p` (non-interactive) ด้วย subscription: ข้อ 3.7 ห้าม "script" แต่ docs ของ Claude Code ไม่ได้ห้ามเรียก binary ทางการแบบ headless สองข้อไม่ตรงกันและโค้ดแก้คำตัดสินไม่ได้ จึงเปลี่ยนค่าเริ่มต้นของ Claude เป็น **interactive** (`[agents] claude_mode = "interactive"`): task เปิด `claude "<prompt>"` เป็น terminal จริงใน tmux session `axon-chat-task<id>` (sandbox/cgroup เดิม; เปิดดู/คุยต่อได้ในแท็บ Chat) งานจบเมื่อ agent เรียก `report_result`/`ask_user`, ผู้ใช้ปิด session, Stop หรือหมดเวลา Axon ไม่ฉีด keystroke; ตอบ trust-folder ใน config ของ Claude เอง (`trust_folder`) ตรวจกับ `claude` จริง 2026-10-08 (`probes/adapter.py claude`: COMPLETED 6 s) แถบ quota ของ Claude มาจาก status line ที่ Claude Code รองรับเอง (`--settings statusLine` → `axon/statusline.py` เขียน `axon-limits.json` ใน agent home; ตรวจกับ `claude` จริงแล้ว) ข้อแลก: ไม่มี stream-json จึงไม่มี usage ต่อ attempt, ตรวจ quota จากข้อความใน terminal (`TUI_QUOTA_RE`, ยังไม่เคยเห็นข้อความจริง), agent ที่รอคุณ (ขออนุญาตหรือถามเป็นข้อความธรรมดา) ไม่มีสัญญาณเอง: Runner ตั้งโน้ตของงานเป็น `waiting for you: open Chat, task<id>` เมื่อ terminal เงียบเกิน `IDLE_SECONDS` (90) และล้างเมื่อขยับอีก `claude_mode = "headless"` ยังใช้ได้ถ้าต้องการออโตเมชันเต็มหรือใช้ API key (ยังไม่ทำ: ส่ง `ANTHROPIC_API_KEY` เข้า env ของ `claude_cmd`) Codex ยังเป็น headless (OpenAI อนุญาต `codex exec` บนเครื่องส่วนตัวที่เชื่อถือได้); interactive ของ Codex รอดูว่าของ Claude ใช้ได้ดี
+- **เคยเทา → ลดแล้ว:** `claude -p` (non-interactive) ด้วย subscription: ข้อ 3.7 ห้าม "script" แต่ docs ของ Claude Code ไม่ได้ห้ามเรียก binary ทางการแบบ headless สองข้อไม่ตรงกันและโค้ดแก้คำตัดสินไม่ได้ จึงเปลี่ยนค่าเริ่มต้นของ Claude เป็น **interactive** (`[agents] claude_mode = "interactive"`): task เปิด `claude "<prompt>"` เป็น terminal จริงใน tmux session `axon-chat-task<id>` (sandbox/cgroup เดิม; เปิดดู/คุยต่อได้ในแท็บ Chat) งานจบเมื่อ agent เรียก `report_result`/`ask_user`, ผู้ใช้ปิด session, Stop หรือหมดเวลา Axon ไม่ฉีด keystroke ยกเว้น nudge หนึ่งครั้ง (D-036); ตอบ trust-folder ใน config ของ Claude เอง (`trust_folder`) ตรวจกับ `claude` จริง 2026-10-08 (`probes/adapter.py claude`: COMPLETED 6 s) แถบ quota ของ Claude มาจาก status line ที่ Claude Code รองรับเอง (`--settings statusLine` → `axon/statusline.py` เขียน `axon-limits.json` ใน agent home; ตรวจกับ `claude` จริงแล้ว) ข้อแลก: ไม่มี stream-json จึงไม่มี usage ต่อ attempt, ตรวจ quota จากข้อความใน terminal (`TUI_QUOTA_RE`, ยังไม่เคยเห็นข้อความจริง), agent ที่รอคุณ (ขออนุญาตหรือถามเป็นข้อความธรรมดา) ไม่มีสัญญาณเอง: Runner ตั้งโน้ตของงานเป็น `waiting for you: open Chat, task<id>` เมื่อ terminal เงียบเกิน `IDLE_SECONDS` (90) และล้างเมื่อขยับอีก `claude_mode = "headless"` ยังใช้ได้ถ้าต้องการออโตเมชันเต็มหรือใช้ API key (ยังไม่ทำ: ส่ง `ANTHROPIC_API_KEY` เข้า env ของ `claude_cmd`) ข้อสังเกตจากการรัน Brainstorm จริง 2026-10-12: (1) Claude บางครั้งเขียนคำตอบลงหน้าจอแล้วจบเทิร์นโดยไม่เรียก `report_result`, หรือเรียกไม่ได้เพราะเซิร์ฟเวอร์ MCP ของ Axon ยังเชื่อมต่อไม่เสร็จในเทิร์นแรก (prompt ที่ตอบได้ทันทีเจอบ่อย) แก้ด้วย D-036: Axon ส่ง nudge ข้อความคงที่หนึ่งครั้งหลังนิ่ง 90 วินาที (ไม่ส่งถ้าหน้าจอเป็นคำถามขอสิทธิ์) และมีประโยค "Required last step" ท้าย prompt ถ้ายังไม่เรียก โน้ต `waiting for you` รอผู้ใช้พิมพ์ในแท็บ Chat (ยังไม่เคยวัดว่า nudge ได้ผลกับ Claude จริง) (2) tmux ปฏิเสธคำสั่งยาวเกิน ~16 KB จึงรัน agent ผ่านไฟล์ `launch.sh` ใน attempt แทนการส่ง prompt ทาง argv ของ tmux
+
+Codex ยังเป็น headless (OpenAI อนุญาต `codex exec` บนเครื่องส่วนตัวที่เชื่อถือได้); interactive ของ Codex รอดูว่าของ Claude ใช้ได้ดี
 - **ห้ามเด็ดขาด:** ให้คนอื่นใช้ Axon ผ่าน subscription ของเรา หรือเปิดเป็น service (ทั้งสองฝั่งห้ามแชร์ account) — ถ้าจะทำต้องเปลี่ยนเป็น API key (ผูกกับ Phase 6 / OD-015)
 
 ## OD-020 Initial backend surface — RESOLVED

@@ -15,17 +15,27 @@ TOOLS = [
          "status": {"type": "string", "enum": ["done", "failed"]},
          "summary": {"type": "string"}}}},
     {"name": "ask_user",
-     "description": "Ask the user a question, then end your turn. The task resumes with the answer. "
-                    "When the answers are known choices, pass them as options: the user picks one with a click.",
-     "inputSchema": {"type": "object", "required": ["question"], "properties": {
+     "description": "Ask the user, then end your turn. The task resumes with the answers. For several things, send them all at once as "
+                    "questions: each has its own options (the user picks one with a click, or types their own). "
+                    "For a single question use question (and options).",
+     "inputSchema": {"type": "object", "properties": {
          "question": {"type": "string"},
-         "options": {"type": "array", "maxItems": 6, "items": {"type": "string"}}}}},
+         "options": {"type": "array", "maxItems": 6, "items": {"type": "string"}},
+         "questions": {"type": "array", "maxItems": 8, "items": {"type": "object", "required": ["question"], "properties": {
+             "question": {"type": "string"},
+             "options": {"type": "array", "maxItems": 6, "items": {"type": "string"}}}}}}}},
     {"name": "delegate",
      "description": "Queue follow-up work as a separate task that starts after you finish, from your result. "
                     "scope must stay inside yours. Limited in number; delegated tasks cannot delegate.",
      "inputSchema": {"type": "object", "required": ["title", "spec", "scope"], "properties": {
          "title": {"type": "string"}, "spec": {"type": "string"},
          "scope": {"type": "array", "items": {"type": "string"}}}}},
+    {"name": "ask_peer",
+     "description": "Ask the other agent (Claude asks Codex, Codex asks Claude) a question and get its answer. It is read-only "
+                    "and sees the project as it was when you started, not your edits, so put the code in the question. "
+                    "Waits for the answer; limited in number.",
+     "inputSchema": {"type": "object", "required": ["question"], "properties": {
+         "question": {"type": "string"}}}},
     {"name": "run_check",
      "description": "Run a project check (tests, lint) in a sandbox without network. "
                     "Returns the exit code and the end of the output.",

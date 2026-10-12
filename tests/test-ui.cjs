@@ -9,7 +9,7 @@ const node = selector => {
   return nodes.get(selector);
 };
 const context = vm.createContext({document:{querySelector:node,querySelectorAll:()=>[],addEventListener(type,callback){listeners.set(type,callback);},title:'',hidden:false},
-  window:{},location:{hash:'',pathname:'/'},history:{replaceState(){}},URLSearchParams,Date,console,setTimeout(){return 0;},clearTimeout,setInterval(){},navigator:{},
+  window:{},location:{hash:'',pathname:'/'},history:{replaceState(){}},URLSearchParams,Date,console,setTimeout(){return 0;},clearTimeout,setInterval(){},navigator:{},matchMedia:()=>({matches:false}),
   FormData: class {constructor(form){this.form=form;}*[Symbol.iterator](){yield* Object.entries(this.form.fields);}}});
 let source = fs.readFileSync('axon/web/app.js','utf8');
 assert(source.endsWith('start();\n'));
@@ -17,7 +17,7 @@ source = source.slice(0,-'start();\n'.length);
 vm.runInContext(source,context);
 vm.runInContext(`
 snapshot={mode:'simulation',paused:false,projects:[],tasks:[]};
-globalThis.renderers={renderDiff,queueHint,artifactBlock,detailPanel,updateAttention,countdown,paletteMatches,paletteEntries,matchesTaskGroup,operatorQueue,agentPanel};
+globalThis.renderers={renderDiff,queueHint,artifactBlock,detailPanel,updateAttention,countdown,paletteMatches,paletteEntries,matchesTaskGroup,operatorQueue,agentPanel,brainstormCard,multiAsk};
 `,context);
 const fixture = {id:'task-safe',state:'COMPLETED',spec:'<script>prompt</script>',instructions:[],artifacts:[{
   id:'artifact-safe',name:'<img src=x onerror=alert(1)>',kind:'diff',attempt_id:'attempt-safe',hash:'abc',simulated:false,
@@ -160,3 +160,34 @@ assert.equal(buttons.length,3);
 assert(!buttons[0].includes('disabled'),'Ready integration must be promotable');
 assert(buttons[1].includes('disabled')&&buttons[2].includes('disabled'),'Blocked or busy integration must be disabled');
 controls().then(()=>console.log('UI checks passed: full patch/result escaping, policy labels, queue escaping, prompt distinction, attention title, confirmation cancellation/stale attempts, displayed source attempt.')).catch(error=>{console.error(error);process.exitCode=1;});
+// Brainstorm: everything an agent wrote (questions, plans, objections) is text, never markup; answers go to the asking task.
+const evil='<img src=x onerror=alert(1)>';
+const card=context.renderers.brainstormCard({id:'7',project_id:'p',goal:evil,phase:'merge',status:'ACTIVE',why:evil,agents:{lead:'claude',other:'codex'},
+  qa:[{by:'claude',q:evil,a:evil}],questions:[{task_id:'3',agent:'codex',question:evil,options:[evil],attempt_id:'3-1',pending_id:'3:3-1:WAITING_INPUT'}],
+  plan:{summary:evil,tasks:[{id:'t1',title:evil,agent:'claude',scope:[evil],spec:evil,brief:'# '+evil,after:null,by:'both'}],disagreements:[{topic:evil,claude:evil,codex:evil}],risks:[evil]},objections:evil,created:null});
+assert(!card.includes('<img'));
+assert(card.includes('&lt;img'));
+assert(card.includes('data-q-pending="3:3-1:WAITING_INPUT"'));
+assert(card.includes('data-bs-stop="7"'));
+assert(!card.includes('data-bs-create'),'Only a finished plan can create tasks');
+const ready=context.renderers.brainstormCard({id:'8',project_id:'p',goal:'g',phase:'ready',status:'READY',why:'',agents:{lead:'claude',other:'codex'},qa:[],questions:[],
+  plan:{summary:'s',tasks:[{id:'t1',title:'one',agent:'claude',scope:['src'],spec:'x',after:null,by:'codex'}]},objections:'',created:null});
+assert(ready.includes('data-bs-create="8"'));
+assert(ready.includes('What the agent will be given'));
+console.log('Brainstorm checks passed.');
+// One ask with several questions: each question gets its own choices and box, all text escaped.
+const ask=context.renderers.multiAsk([{question:'<b>1</b>',options:['stdin','<img src=x>']},{question:'format?',options:[]}],'data-q-task="9"');
+assert(!ask.includes('<b>')&&!ask.includes('<img'));
+assert.equal((ask.match(/<textarea/g)||[]).length,2);
+assert.equal((ask.match(/data-ask-fill/g)||[]).length,2,'only the first question has choices');
+assert(ask.includes('name="a1"'));
+const multi=context.renderers.brainstormCard({id:'9',project_id:'p',goal:'g',phase:'clarify',status:'ACTIVE',why:'',agents:{lead:'claude',other:'codex'},qa:[],
+  questions:[{task_id:'3',agent:'codex',question:'1) a',options:[],questions:[{question:'a',options:['x']}],attempt_id:'3-1',pending_id:'3:3-1:WAITING_INPUT'}],plan:null,objections:'',created:null});
+assert(multi.includes('multi-ask')&&multi.includes('data-q-pending="3:3-1:WAITING_INPUT"'));
+console.log('Multi-question checks passed.');
+// The two agents' own question tasks stay out of the operator queue while their questions sit in one merged form.
+const q2=context.renderers.operatorQueue([{id:'36',title:'t',state:'WAITING_INPUT',held_by:'5',updated_at:1},{id:'40',title:'u',state:'WAITING_INPUT',held_by:null,updated_at:2}]);
+assert(!q2.includes('36')&&q2.includes('40')&&q2.includes('1 decision waiting'));
+console.log('Held-question checks passed.');
+assert(!context.renderers.matchesTaskGroup({state:'WAITING_INPUT',held_by:'5'},'attention'),'a merged-question task is not counted as needing the user');
+assert(context.renderers.matchesTaskGroup({state:'WAITING_INPUT',held_by:null},'attention'));

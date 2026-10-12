@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from axon import runtime
@@ -154,18 +155,17 @@ class ChatSessions(AxonTest):
             self.fail("the browser's tmux client is still attached")
         self.assertIn(self.NAME, self.b.command({"action": "chat_list"})["sessions"])
 
-    def test_image_upload_lands_in_the_clone_and_its_path_in_the_input(self):
-        repo = runtime.data_dir() / "chats" / "x" / "repo"
-        (repo / ".git" / "info").mkdir(parents=True)
-        (repo / ".git" / "info" / "exclude").write_text("# a git clone has this file\n")
-        subprocess.run(["tmux", "set-option", "-t", self.NAME, "@axon_repo", str(repo)], check=True)
-        subprocess.run(["tmux", "set-option", "-t", self.NAME, "@axon_cwd", "/w/proj"], check=True)
+    def test_image_upload_lands_in_the_project_and_its_path_in_the_input(self):
+        proj = runtime.data_dir() / "proj"
+        (proj / ".git" / "info").mkdir(parents=True)
+        (proj / ".git" / "info" / "exclude").write_text("# a git repo has this file\n")
+        subprocess.run(["tmux", "set-option", "-t", self.NAME, "@axon_cwd", str(proj)], check=True)
         png = b"\x89PNG\r\n\x1a\n" + b"0" * 20
         path = self.b.chat_upload(self.NAME, "image/png", png)["path"]
         self.assertEqual(open(path, "rb").read(), png)
-        self.assertIn(".axon-uploads/", (repo / ".git" / "info" / "exclude").read_text())
+        self.assertIn(".axon-uploads/", (proj / ".git" / "info" / "exclude").read_text())
         time.sleep(0.3)
-        self.assertIn(f"/w/proj/.axon-uploads/{os.path.basename(path)}", self.screen())  # where the agent sees it
+        self.assertIn(f"{proj}/.axon-uploads/{os.path.basename(path)}", self.screen())  # where the agent sees it
         for ctype, data in (("image/png", b"not a png"), ("text/html", b"<script>"), ("image/svg+xml", b"<svg>")):
             with self.assertRaises(ControlError):
                 self.b.chat_upload(self.NAME, ctype, data)
@@ -360,6 +360,17 @@ class Runtime(BridgeTest):
                 self.b.command({"action": "create_project", **bad})
         self.assertEqual(self.b.command({"action": "create_project", "name": "second", "path": str(self.proj)}), {"id": "second"})
         self.assertEqual({p["id"] for p in self.b.snapshot()["projects"]}, {"p", "second"})
+
+    def test_browse_dir_lists_visible_subfolders_and_flags_repositories(self):
+        (self.proj.parent / "plain").mkdir(exist_ok=True)
+        (self.proj.parent / ".hidden").mkdir(exist_ok=True)
+        r = self.b.command({"action": "browse_dir", "path": str(self.proj.parent)})
+        self.assertEqual(r["parent"], str(self.proj.parent.parent))
+        names = {d["name"]: d["git"] for d in r["dirs"]}
+        self.assertIs(names[self.proj.name], True)
+        self.assertIs(names["plain"], False)
+        self.assertNotIn(".hidden", names)
+        self.assertEqual(self.b.command({"action": "browse_dir", "path": "/nonexistent"})["path"], str(Path.home().resolve()))
 
     def test_running_attempt_reports_measured_memory(self):
         tid = self.create(step("hang"))

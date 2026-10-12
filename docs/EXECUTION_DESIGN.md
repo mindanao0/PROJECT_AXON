@@ -29,11 +29,14 @@ Tools Phase 1 แทน message types 14 แบบ:
 | Tool | ผล |
 | --- | --- |
 | `report_result(status, summary)` | status = done / blocked / failed; Runtime ทำ snapshot commit เองแล้วส่งเข้า VERIFY |
-| `ask_user(question)` | task → WAITING_INPUT |
+| `ask_user(question)` | task → WAITING_INPUT ถามหลายข้อพร้อมกันได้: `questions=[{question, options}]` แต่ละข้อมีตัวเลือกของตัวเอง (GUI ให้คลิกเติมช่อง พิมพ์เองได้ ส่งทีเดียว; `axon answer` ถามทีละข้อ) คำตอบกลับไปเป็นรายการเลขข้อ `1) …\n2) …` |
 | `run_check(name)` | รันเฉพาะ check ที่ตั้งไว้ใน project config (§9) คืน exit code กับท้าย output; output เต็มเก็บเป็น artifact |
 | `delegate(title, spec, scope)` | (Phase 2) queue งานต่อที่เริ่มหลัง attempt นี้จบจากผลของมัน: scope ต้องอยู่ใน scope ตัวเอง, ลึก 1 ชั้น, ไม่เกิน `max_delegations`; review task ใช้ไม่ได้ |
+| `ask_peer(question)` | (D-034) ถาม agent อีกตัว (Claude ↔ Codex) แล้วรอคำตอบ: Runtime สร้าง task `ask` read-only บน commit ที่ attempt นี้เริ่ม (ไม่เห็นงานที่ยังไม่ snapshot จึงต้องใส่โค้ดในคำถาม) ผู้ตอบ `report_result` คำตอบกลับมาเป็นผลของ tool; ไม่เกิน `max_asks`, รอไม่เกิน `ask_timeout`; task `ask`/`review` ถามต่อไม่ได้; task `ask` ไม่ claim scope, ไม่ใช่ผลที่ review/integrate/apply ได้; Codex ตั้ง `tool_timeout_sec` ให้เกินเวลารอ (ค่าเริ่มต้นของ Codex คือ 60 วินาที) |
 
 Phase 2 เพิ่ม `delegate(title, spec, scope)` ส่วนการขอ review เป็นคำสั่งของผู้ใช้/policy ไม่ใช่ tool ของ agent (implementer ไม่เลือก reviewer ของตัวเอง) message types อื่นเป็น event type ใน log ไม่ใช่สิ่งที่ agent ต้องรู้
+
+**Brainstorm (D-035):** task ชนิด `plan` ใช้ tool ชุดเดียวกัน (`report_result`, `ask_user`) แบบอ่านอย่างเดียวเหมือน `review`/`ask` (ไม่ claim scope, ตรวจว่าไม่มีไฟล์เปลี่ยน, delegate/`ask_peer` ไม่ได้) `axon/brainstorm.py` เลื่อนขั้นจาก `Runtime.tick()` ตามสถานะใน SQLite (ตาราง `brainstorms`) จึงเดินต่อได้หลัง runner รีสตาร์ต ขั้น: `clarify` (ทั้งสองฝั่งถามผู้ใช้ จนรอบหนึ่งไม่มีคำถามใหม่ ไม่เกิน 10 รอบ; ถ้าทั้งคู่ถามพร้อมกัน คำถามผ่านขั้น `gate` รวมเป็นฟอร์มเดียวก่อนถึงผู้ใช้ D-038) → `draft` (แยกกัน ไม่เห็นกัน) → `compare` → `merge` (lead, JSON ตาม schema ใน `brainstorm.py`: `unknowns` ต้องว่าง และทุกงานต้องมี `objective`, `steps`, `acceptance`; D-037) → `check` → READY ผู้ใช้เท่านั้นที่ทำให้เกิด task จริง (`create_tasks` ผ่าน `add_task` เดิม) แผน JSON เป็นข้อมูลให้ผู้ใช้ดูก่อน ไม่มีอะไรรันเองจากข้อความของโมเดล task ที่สร้างได้ `spec` เป็น brief Markdown ที่ Axon ประกอบจากฟิลด์ (`brainstorm.brief`) ซึ่งคือข้อความเดียวกับที่หน้าจอให้ผู้ใช้เห็นก่อนอนุมัติ
 
 - Identity: Runtime สร้าง Unix socket แยกต่อ attempt และ bind เข้า sandbox ของ attempt นั้นเท่านั้น สิ่งที่ต่อเข้ามาทาง socket นี้คือ attempt นั้น ไม่เชื่อชื่อที่ model เขียน
 - Attempt จบหรือถูก reassign → ปิด socket; late result ส่งเข้ามาไม่ได้
@@ -77,7 +80,7 @@ Worktree แชร์ `.git/config` และ `.git/hooks` กับ checkout �
 
 VELA: checkout ไฟล์ที่ track ประมาณ 482 MB ต่อ clone; `.git` 371 MB แชร์ไม่ copy; env ของ prototypes ที่ไม่ได้ track ไม่ถูก copy — `prepare` สร้าง `.venv` ต่อ clone จาก uv cache
 
-## 5. Quota (subscription 20 USD)
+## 5. Quota (subscription)
 
 - Slot: codex 1, claude 1 session พร้อมกัน
 - Rate limit ที่ตรวจจาก exit/stream error → provider เข้า COOLDOWN จนถึงเวลา reset ถ้า CLI บอก ไม่บอกใช้ backoff 15 → 30 → 60 นาที; task → WAITING_QUOTA ไม่นับ retry
@@ -109,9 +112,9 @@ Verified: ผู้ใช้อยู่ในกลุ่ม `docker`; sandbox 
 - **ทรัพยากร:** slot ต่อประเภท + cgroup ต่อ attempt (verified: MemoryMax และ Kill ทั้ง tree รวม process ที่ setsid หนี) ค่าเริ่มต้นสำหรับ RAM 15 GB / GTX 1660 Ti 6 GB: agent 3G, check 4G, local LLM 1 slot (`OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`); ปรับได้ใน config
 - จับงานซ้ำแบบ similarity (embedding) ยังไม่ทำ จนกว่าจะเจองานซ้ำที่ hash จับไม่ได้จริง
 
-## 9. Project config (ตัวอย่าง VELA)
+## 9. Project config (ตัวอย่าง)
 
-อยู่นอก repo ที่ `~/.config/axon/projects/vela.toml` — ไม่เพิ่มไฟล์ใน VELA และ VELA ห้ามไฟล์ `.json`
+อยู่นอก repo ที่ `~/.config/axon/projects/vela.toml` — ไม่เพิ่มไฟล์ใน repo ของ project (ตัวอย่างนี้ project ห้ามไฟล์ `.json`)
 
 ```toml
 path = "~/code/PROJECT_VELA"

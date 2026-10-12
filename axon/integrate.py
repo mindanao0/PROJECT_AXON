@@ -76,7 +76,7 @@ def integrate(rt, tid):
 def _integrate(rt, tid):
     s = rt.store
     t = s.one("select * from tasks where id = ?", tid)
-    if not t or t["status"] != "COMPLETED" or not t["head"] or t["kind"] == "review":
+    if not t or t["status"] != "COMPLETED" or not t["head"] or t["kind"]:
         raise IntegrationError("only a completed implementation task with a result can be integrated")
     proj = runtime.load_project(t["project"])
     if proj["require_review"] and not runtime.review_approved(s, tid, t["head"]):

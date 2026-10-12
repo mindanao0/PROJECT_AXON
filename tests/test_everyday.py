@@ -130,7 +130,7 @@ class OutsideFoldersAndWeb(AxonTest):
 
 @unittest.skipUnless(shutil.which("tmux"), "needs tmux")
 class ShellChat(AxonTest):
-    def test_shell_runs_in_the_sandboxed_clone(self):
+    def test_shell_runs_in_the_project_folder_itself(self):
         sock = self.enterContext(tempfile.TemporaryDirectory(dir="/tmp"))
         self.enterContext(mock.patch.dict(os.environ, {"TMUX_TMPDIR": sock}))
         os.environ.pop("TMUX", None)
@@ -138,29 +138,15 @@ class ShellChat(AxonTest):
         name = runtime.chat_start("p", "shell")
         self.addCleanup(runtime.chat_close, name)
         subprocess.run(["tmux", "send-keys", "-t", name, "-l",
-                        f"pwd; touch {self.proj}/x; echo OBJ-$(git cat-file -t HEAD); echo END-$((1+1))\n"], check=True)
+                        f"pwd; touch x; echo HOME-$HOME; echo END-$((1+1))\n"], check=True)
         for _ in range(50):
             screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
             if "END-2" in screen:
                 break
             time.sleep(0.1)
-        self.assertIn(f"\n{self.proj}\n", screen)  # its clone, shown at the project's path (resume lists that folder's sessions)
-        self.assertIn("OBJ-commit", screen)  # git works there: the clone has its own objects
-        self.assertTrue((runtime.data_dir() / "chats" / "p-shell" / "repo" / "x").exists())
-        self.assertFalse((self.proj / "x").exists(), "your checkout is not reachable from the shell")
-
-    def test_a_chat_clone_from_before_gets_its_own_objects(self):
-        sock = self.enterContext(tempfile.TemporaryDirectory(dir="/tmp"))
-        self.enterContext(mock.patch.dict(os.environ, {"TMUX_TMPDIR": sock}))
-        os.environ.pop("TMUX", None)
-        self.addCleanup(subprocess.run, ["tmux", "kill-server"], capture_output=True)
-        repo = runtime.data_dir() / "chats" / "p-shell" / "repo"
-        sandbox.clone(str(self.proj), repo, "HEAD", "axon/chat/shell")  # shared, as chats were made before
-        self.addCleanup(runtime.chat_close, runtime.chat_start("p", "shell"))
-        self.assertFalse((repo / ".git" / "objects" / "info" / "alternates").exists())
-        self.assertEqual(subprocess.run(["git", "-C", str(repo), "cat-file", "-t", "HEAD"], capture_output=True,
-                                        text=True, env={**os.environ, "GIT_ALTERNATE_OBJECT_DIRECTORIES": ""}).stdout, "commit\n")
-
+        self.assertIn(f"\n{self.proj}\n", screen)
+        self.assertIn(f"HOME-{Path.home()}", screen, "your own home, not an empty one")
+        self.assertTrue((self.proj / "x").exists(), "no clone in between: the shell edits your checkout")
 
     def test_a_command_over_the_memory_limit_does_not_end_the_chat(self):
         sock = self.enterContext(tempfile.TemporaryDirectory(dir="/tmp"))

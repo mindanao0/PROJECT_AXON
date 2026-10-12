@@ -30,6 +30,24 @@ class Interactive(AxonTest):
         self.assertNotIn(f"axon-chat-task{tid}", sessions())
         self.assertTrue(self.store.one("select 1 from events where task = ? and kind = 'interactive'", tid))
 
+    def test_a_prompt_too_long_for_a_tmux_command_line_still_starts(self):
+        tid = self.add(edit("src/new.py", "print(1)") + DONE + "# " + "ก" * 20000 + "\n")  # ~60 KB of UTF-8 in the prompt
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "COMPLETED")
+
+    def test_a_session_that_goes_quiet_without_reporting_gets_one_nudge(self):
+        tid = self.add(step("read_line") + step("mcp", tool="report_result", args={"status": "done", "summary": "after the nudge"}))
+        with mock.patch.object(runtime, "IDLE_SECONDS", 2):
+            self.run_all()
+        self.assertEqual(self.task(tid)["status"], "COMPLETED")
+        self.assertEqual(len(self.store.q("select 1 from events where task = ? and kind = 'nudge'", tid)), 1)
+        self.assertIn("call report_result", runtime.attempt_log(f"{tid}-1").read_text())  # what it was sent
+
+    def test_a_nudge_goes_to_a_prompt_box_never_to_a_permission_question(self):
+        self.assertTrue(runtime.can_nudge("done\n❯ \n  ⏵⏵ accept edits on"))
+        for ask in ("Do you want to proceed?\n❯ 1. Yes\n  2. No", "Allow this tool to run? (y/n)"):
+            self.assertFalse(runtime.can_nudge(ask))
+
     def test_stop_ends_the_session_and_its_processes(self):
         tid = self.add(step("hang"))
         runner = threading.Thread(target=self.rt.run_until_idle, kwargs={"timeout": 60})

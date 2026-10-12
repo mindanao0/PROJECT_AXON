@@ -1,7 +1,9 @@
 """Phase 2: dependencies, bounded revision rounds, delegation, reviews that claim no scope."""
 
 import json
+import threading
 import time
+import unittest.mock
 
 from axon import integrate, runtime
 from test_axon import DONE, AxonTest, edit, step
@@ -145,6 +147,62 @@ class Delegation(AxonTest):
             th.join(30)
 
 
+class AskPeer(AxonTest):
+    """claude <-> codex questions, with the fake agent standing in for both (PEER maps it to itself)."""
+
+    def setUp(self):
+        super().setUp()
+        self.peer = unittest.mock.patch.dict(runtime.PEER, {"fake": "fake"})
+        self.peer.start()
+        self.addCleanup(self.peer.stop)
+        self.live = True
+        threading.Thread(target=self.tick_while_live, daemon=True).start()  # the runner, while the test asks by hand
+        self.addCleanup(setattr, self, "live", False)
+
+    def tick_while_live(self):
+        while self.live:
+            self.rt.tick()
+            time.sleep(0.2)
+
+    def test_agent_asks_its_peer_and_gets_the_answer_back(self):
+        question = verdict("done", "use the cache")  # the fake peer reads its question as its script
+        asker = self.add(step("mcp", tool="ask_peer", args={"question": question}) + edit("src/p.py") + DONE)
+        self.run_all()
+        (ask,) = self.store.q("select * from tasks where kind = 'ask'")
+        self.assertEqual((self.task(asker)["status"], ask["status"], ask["target"]), ("COMPLETED", "COMPLETED", asker))
+        self.assertIn("use the cache", runtime.attempt_log(f"{asker}-1").read_text())  # the asker saw the answer
+        with self.assertRaises(ValueError):  # a question is not a result
+            runtime.request_review(self.store, ask["id"], "fake")
+        with self.assertRaises(ValueError):
+            runtime.apply_result(self.store, ask["id"])
+
+    def test_questions_are_bounded_and_only_for_implementation_tasks(self):
+        asker = self.add(step("hang"))
+        self.wait(lambda: self.store.one("select 1 from attempts where task = ? and status = 'running'", asker))
+        aid = f"{asker}-1"
+        for i in range(3):
+            self.assertTrue(self.rt._ask_peer(self.task(asker), aid, {"question": verdict("done", f"a{i}")})[0])
+        self.assertIn("limit", self.rt._ask_peer(self.task(asker), aid, {"question": verdict("done", "a3")})[1])
+        ask = self.store.one("select * from tasks where kind = 'ask'")
+        self.assertEqual(self.rt._ask_peer(ask, aid, {"question": "q"}), (False, "this task cannot ask a peer"))
+        self.assertFalse(self.rt._ask_peer(self.task(asker), aid, {"question": " "})[0])
+        runtime.stop_task(self.store, asker)
+        for th in self.rt.threads:
+            th.join(30)
+
+    def test_a_peer_that_never_answers_is_given_up_on(self):
+        self.rt.cfg["limits"]["ask_timeout"] = 2
+        asker = self.add(step("hang"))
+        self.wait(lambda: self.store.one("select 1 from attempts where task = ? and status = 'running'", asker))
+        ok, msg = self.rt._ask_peer(self.task(asker), f"{asker}-1", {"question": step("hang")})
+        self.assertFalse(ok)
+        self.assertIn("did not answer", msg)
+        runtime.stop_task(self.store, asker)
+        for th in self.rt.threads:
+            th.join(30)
+        self.assertIn(self.store.one("select status from tasks where kind = 'ask'")["status"], ("CANCELLED", "FAILED"))
+
+
 class IntegrationReview(AxonTest):
     def setUp(self):
         super().setUp()
@@ -280,3 +338,20 @@ class TaskChecks(AxonTest):
         self.run_all()
         prompt = (self.tmp / "home" / "attempts" / f"{a}-1" / "prompt.txt").read_text()
         self.assertIn("Your result is verified by: a; the others belong to parallel work.", prompt)
+
+
+class AskThenReport(AxonTest):
+    def test_a_question_is_not_lost_when_the_agent_reports_after_asking(self):
+        tid = self.add(step("mcp", tool="ask_user", args={"question": "which database?"})
+                       + step("mcp", tool="report_result", args={"status": "done", "summary": "asked"}))
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "WAITING_INPUT")  # not COMPLETED: the user still has to answer
+        self.assertIn("which database?", self.task(tid)["note"])
+
+    def test_a_long_choice_comes_back_whole(self):
+        long = "one row per word: file, word_count, word, frequency; a file with no words gets one row with an empty word and frequency"
+        tid = self.add(step("mcp", tool="ask_user", args={"question": "csv?", "options": [long, "x" * 900]}))
+        self.run_all()
+        options = runtime.ask_options(self.store, tid)
+        self.assertEqual(options[0], long)  # was cut at 120 characters, so the agent could not tell what had been chosen
+        self.assertEqual(len(options[1]), runtime.OPTION_MAX)
