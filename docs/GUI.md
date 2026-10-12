@@ -54,21 +54,21 @@ axon
 ### Operator controls
 
 - **Ctrl+K / Cmd+K** หรือปุ่ม Command เปิด command palette: ค้นหาคำสั่ง, task title/ID/state และ project; ใช้ ↑/↓ เลือก, Enter เปิด และ Esc ปิด
-- **Alt+N** เปิด New task และ **Alt+1…7** เปลี่ยนหน้าตามลำดับเมนู คีย์ลัดเหล่านี้ไม่ทำงานขณะกรอกข้อมูลหรือมี dialog เปิดอยู่
-- คลิก statistic tile เพื่อเปิด Task board พร้อม task-group filter; selector แสดง filter ที่เลือก และเปลี่ยนกลับ All tasks ได้
+- **Alt+N** เปิด New task และ **Alt+1…7** เปลี่ยนหน้าตามลำดับเมนู (Tasks, Plans, Brainstorm, Agent chat, Agents, Activity, Settings) คีย์ลัดเหล่านี้ไม่ทำงานขณะกรอกข้อมูลหรือมี dialog เปิดอยู่
+- คลิก statistic tile เพื่อเปิดหน้า Tasks พร้อม task-group filter; selector แสดง filter ที่เลือก และเปลี่ยนกลับ All tasks ได้
 - **Operator required** รวมงานรอ input/approval/review ใน project ที่เลือก เรียงตามเวลาที่อัปเดตเก่าสุดก่อน เปิด request/diff ทีละงานก่อนตอบหรืออนุมัติ
-- Agent fleet ในโหมด real ใช้ provider/status/slot/cooldown ที่ runtime ส่งมาทั้งใน Overview และหน้า Agents; ไม่สร้าง worker จำลองหรือสถานะ login เอง
+- Agent fleet ในโหมด real ใช้ provider/status/slot/cooldown ที่ runtime ส่งมาในหน้า Agents; ไม่สร้าง worker จำลองหรือสถานะ login เอง
 - Completed แสดง progress จากจำนวนงานที่เสร็จ/งานทั้งหมด; footer แสดงเวลาท้องถิ่นและสถานะ sync โดยยืนยัน LIVE หลังรับ snapshot สำเร็จเท่านั้น ปุ่มคำสั่งที่ต้องเชื่อม runtime ถูกปิดเมื่อ offline
 
 
 | หน้า | ใช้ทำอะไร |
 | --- | --- |
-| Overview | จำนวนงาน, task board, agent fleet, recent activity และงานรอผู้ใช้ |
-| Task board | ค้นหางาน, filter สถานะ, เลือก project, เปิดรายละเอียดงาน |
-| Agents | ดู backend/capability ที่ยังไม่ทดสอบ; Codex/Claude/Local ถูกปิด |
+| Control room (Tasks) | จำนวนงาน, งานรอผู้ใช้, task board พร้อมค้นหา/filter สถานะ/เลือก project, เปิดรายละเอียดงาน (หน้าแรก; เดิมแยกเป็น Overview กับ Task board ที่ซ้ำกัน) |
+| Plans | (เฉพาะ real) ตามแผนจาก Brainstorm ทีละงาน แยกเป็น To do / In progress / Done / Stuck ตาม state ของ task จริง พร้อม progress `n / N done` (D-039) |
+| Brainstorm | ถาม-ตอบและขั้นของการวางแผน (เฉพาะ real) |
+| Agent chat | terminal จริง (เฉพาะ real) |
+| Agents | provider, login, slot, cooldown, limit ที่เหลือ รวมถึง dispatch capacity และ usage 24 ชม. (เดิมแยกเป็นหน้า Resources) |
 | Activity log | ดู event ที่ Runtime บันทึกพร้อม task/attempt และ cursor |
-| Artifacts | ดู simulated result/verifier evidence พร้อม content hash และ attempt ID |
-| Resources | slot ที่ใช้/ทั้งหมดและ active attempts; RAM แสดงว่าไม่มีข้อมูลวัดจริง |
 | Runtime settings | ดูขอบเขต local transport, recovery และความสามารถที่ยังไม่มี |
 
 1. กด **New task** ใส่ชื่อ, description/acceptance, project และ scope ที่เป็น relative path เช่น `src/, tests/`
@@ -168,7 +168,8 @@ GUI เดียวกัน แต่ขับ runtime จริงผ่าน
 | REVIEW | ไม่มีคำถามแยก UI เปิด diff ให้ตรวจแล้ว Approve/Reject (ผูกกับ attempt ที่เห็น) |
 | Stop/Kill | `capabilities.controls.graceful_stop = false`: ฆ่า process tree ทันที UI จึงแสดง "Terminate attempt" |
 | Apply to my folder | `git apply` ผลของงาน (`base..head`) ลง working tree ของ project แบบ uncommitted; all-or-nothing: ถ้างานของคุณแก้บรรทัดเดียวกันจะไม่เขียนอะไร; บันทึก event `applied` (`auto_apply = true` ในไฟล์ project = ทำเองหลังผ่าน checks) |
-| Brainstorm | (เฉพาะโหมด real) ฟอร์มเริ่ม: โปรเจกต์ เป้าหมาย lead/other และ model/effort ของแต่ละฝั่ง (ปุ่มเติมค่าแนะนำ); การ์ดต่อ brainstorm แสดงขั้นปัจจุบัน คำถามจาก agent พร้อมช่องตอบ/ตัวเลือก (ตอบด้วย action `answer` ของ task นั้น) คำตอบที่ผ่านมา แผนพร้อมป้ายผู้เสนอและ brief ของแต่ละงาน (กางดูได้: ข้อความที่ agent ผู้ทำจะได้รับจริง) ข้อที่เห็นไม่ตรงกัน ความเสี่ยง ข้อค้านของผู้ตรวจ และปุ่ม **Create these N tasks** / **Stop** (action `brainstorm_start`, `brainstorm_create_tasks`, `brainstorm_stop`; snapshot มี `brainstorms`) |
+| Brainstorm | (เฉพาะโหมด real) ฟอร์มเริ่ม: โปรเจกต์ เป้าหมาย lead/other และ model/effort ของแต่ละฝั่ง (ปุ่มเติมค่าแนะนำ); การ์ดต่อ brainstorm แสดงขั้นปัจจุบัน คำถามจาก agent พร้อมช่องตอบ/ตัวเลือก (ตอบด้วย action `answer` ของ task นั้น) คำตอบที่ผ่านมา และปุ่ม **Stop** / **Review the plan** (action `brainstorm_start`, `brainstorm_stop`; snapshot มี `brainstorms`) |
+| Plans | (เฉพาะโหมด real) เมื่อ brainstorm ถึง READY Axon เขียน `PLAN.md` (ให้คนอ่าน) กับ `plan.json` (ให้ agent อ่าน) ที่ `~/.local/share/axon/plans/<id>/` จาก JSON ของแผนตัวเดียวกัน หน้านี้แสดงเส้นทางไฟล์ ข้อที่เห็นไม่ตรงกัน ความเสี่ยง ข้อค้านของผู้ตรวจ แต่ละ phase มีปุ่ม **Break phase into tasks** (`brainstorm_expand`; ให้ lead เขียน task ของ phase นั้นหลัง phase ก่อนหน้าเสร็จ) และ **Start phase: create these N tasks** (`brainstorm_create_tasks` + `phase`) แล้วเป็นกระดาน 4 ช่องตาม state ของ task จริง (CLI: `axon brainstorm ID --expand [PHASE]`, `--approve [--phase PHASE]`) แต่ละการ์ดกาง "Done when" และ brief ที่ agent ได้รับได้ ก่อนสร้าง task Axon รัน checks บน HEAD ของโปรเจกต์ ถ้าแดงอยู่แล้วจะถามก่อนว่าจะเริ่มต่อไหม (`force`; CLI `--force`) task ที่ระบุ `after` หลายงานเริ่มจากผลของทุกงานที่รวมกัน และงานที่ไม่มี `after` ใน phase จะต่อจากผลของทั้ง phase ก่อนหน้า phase ที่เริ่มแล้วแต่มีงานล้ม/ถูกหยุดจะมีปุ่ม **Retry phase** ที่สร้างใหม่เฉพาะงานเหล่านั้น |
 | คำถามที่รวมจากสองฝั่ง | ในขั้นถามของ Brainstorm ถ้า Claude และ Codex ถามพร้อมกัน หน้าจอแสดง "Collecting questions …" ระหว่างรวม (ไม่เกิน 120 วินาทีที่รอฝั่งที่ช้า) แล้วเป็นฟอร์มเดียว แต่ละข้อกางดูถ้อยคำเดิมของแต่ละฝั่งได้ ตอบครั้งเดียว (`brainstorm_answer`) หรือ `axon brainstorm ID --answer` |
 | คำถามหลายข้อจาก agent | `ask_user` ส่ง `questions` ได้ครั้งละหลายข้อ (สูงสุด 8) ฟอร์มแสดงทีละข้อพร้อมปุ่มตัวเลือกของข้อนั้นและช่องพิมพ์เอง ต้องตอบทุกข้อแล้วกด Send all answers ครั้งเดียว ใช้ทั้งในหน้า Brainstorm และกล่อง Your input is needed ของ task |
 | Agent chat | terminal จริง (xterm.js ที่โหลดเมื่อเปิดหน้า chat) ต่อ WebSocket กับ `tmux attach` บน pty; เลือก Claude Code, Codex หรือ Shell (bash ในโฟลเดอร์โปรเจกต์); ขนาดตามหน้าจอ, wheel/ปัดนิ้ว/ปุ่ม Scroll ▲▼ เลื่อนย้อน, ลากเลือก = copy ลง clipboard (OSC 52 จาก tmux), Ctrl+Shift+V = paste, ปุ่ม Esc/Tab/↑↓/Ctrl-C สำหรับมือถือ; วาง/ลากรูปเพื่อแนบ |

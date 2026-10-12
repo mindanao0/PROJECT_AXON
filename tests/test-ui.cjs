@@ -17,7 +17,7 @@ source = source.slice(0,-'start();\n'.length);
 vm.runInContext(source,context);
 vm.runInContext(`
 snapshot={mode:'simulation',paused:false,projects:[],tasks:[]};
-globalThis.renderers={renderDiff,queueHint,artifactBlock,detailPanel,updateAttention,countdown,paletteMatches,paletteEntries,matchesTaskGroup,operatorQueue,agentPanel,brainstormCard,multiAsk};
+globalThis.renderers={renderDiff,queueHint,artifactBlock,detailPanel,updateAttention,countdown,paletteMatches,paletteEntries,matchesTaskGroup,operatorQueue,providerItems,providerCard,planCard,brainstormCard,multiAsk};
 `,context);
 const fixture = {id:'task-safe',state:'COMPLETED',spec:'<script>prompt</script>',instructions:[],artifacts:[{
   id:'artifact-safe',name:'<img src=x onerror=alert(1)>',kind:'diff',attempt_id:'attempt-safe',hash:'abc',simulated:false,
@@ -66,11 +66,33 @@ assert(context.renderers.paletteEntries().find(item=>item.id==='new').disabled);
 assert(context.renderers.paletteEntries().find(item=>item.id==='task-review').disabled);
 assert(!context.renderers.paletteEntries().find(item=>item.id==='refresh').disabled);
 vm.runInContext(`snapshot.providers=[{id:'codex',name:'Codex <img src=x>',status:'Busy',slots_used:2,slot_limit:3,capability:'Sandboxed CLI'}];`,context);
-const fleet=context.renderers.agentPanel();
-assert(fleet.includes('2 / 3 slots'),'Overview fleet must use runtime slot counts');
+const fleet=context.renderers.providerItems().map(context.renderers.providerCard).join('');
+assert(fleet.includes('2 / 3 slots'),'Agents page must use runtime slot counts');
 assert(fleet.includes('Busy'));
 assert(!fleet.includes('In-process simulation'),'Real fleet must not invent a simulated worker');
 assert(!fleet.includes('<img'));
+
+vm.runInContext(`snapshot.mode='real';snapshot.tasks=[{id:'7',state:'COMPLETED'},{id:'8',state:'RUNNING'}];`,context);
+const mk=id=>({id,title:'<i>'+id+'</i>',agent:'claude',scope:[],acceptance:['ok'],brief:'b'});
+const board=context.renderers.planCard({id:'1',goal:'<b>g</b>',project_id:'p',status:'READY',created:{a:7,b:8},files:{human:'/x/PLAN.md',ai:'/x/plan.json'},expand_error:'',
+  plan:{summary:'s',phases:[{id:'p1',title:'one',objective:'o',done_when:[],tasks:[mk('a'),mk('b'),mk('c')],started:true,done:false,ready:false,expanding:false},
+                            {id:'p2',title:'two',objective:'o',done_when:[],tasks:[],started:false,done:false,ready:false,expanding:false}]}});
+assert(board.includes('1 / 3 written tasks done, 0 / 2 phases'),'a plan counts its completed tasks and phases');
+assert(board.includes('/x/plan.json'));
+assert(!board.includes('<i>')&&!board.includes('<b>g'),'plan text is escaped');
+assert(board.includes('Done <small>1')&&board.includes('In progress <small>1')&&board.includes('To do <small>1'),'tasks sit in the lane of their real state');
+assert(!board.includes('data-bs-expand')&&!board.includes('data-bs-create'),'a phase that is not its turn has no button');
+const turn=(extra,tasks)=>context.renderers.planCard({id:'2',goal:'g',project_id:'p',status:'READY',created:null,files:null,expand_error:'<img src=x>',
+  plan:{summary:evil0,phases:[{id:'p1',title:'t',objective:'o',done_when:[evil0],tasks,started:false,done:false,ready:true,expanding:false,...extra}],disagreements:[{topic:evil0,claude:evil0,codex:evil0}],risks:[evil0]},objections:evil0});
+const evil0='<img src=x onerror=alert(1)>';
+assert(turn({}, []).includes('data-bs-expand="2" data-bs-phase="p1"'),'an empty phase offers to be broken into tasks');
+const withTasks=turn({}, [mk('a')]);
+assert(withTasks.includes('data-bs-create="2" data-bs-phase="p1"')&&!withTasks.includes('<img')&&withTasks.includes('What the agent is given'));
+assert(turn({expanding:true}, []).includes('breaking this phase into tasks'));
+const retry=turn({ready:false,started:true,failed:2}, [mk('a')]);
+assert(retry.includes('data-bs-create="2" data-bs-phase="p1"')&&retry.includes('make the 2 failed or stopped tasks again'),'a started phase with failed tasks offers a retry');
+assert(!turn({ready:false,started:true,failed:0}, [mk('a')]).includes('data-bs-create'),'a started phase with nothing failed offers nothing');
+assert(withTasks.includes('>READY<')&&!withTasks.includes('>RUNNING<'),'written tasks that nobody started do not make the plan RUNNING');
 
 async function controls() {
   vm.runInContext(`
@@ -164,16 +186,15 @@ controls().then(()=>console.log('UI checks passed: full patch/result escaping, p
 const evil='<img src=x onerror=alert(1)>';
 const card=context.renderers.brainstormCard({id:'7',project_id:'p',goal:evil,phase:'merge',status:'ACTIVE',why:evil,agents:{lead:'claude',other:'codex'},
   qa:[{by:'claude',q:evil,a:evil}],questions:[{task_id:'3',agent:'codex',question:evil,options:[evil],attempt_id:'3-1',pending_id:'3:3-1:WAITING_INPUT'}],
-  plan:{summary:evil,tasks:[{id:'t1',title:evil,agent:'claude',scope:[evil],spec:evil,brief:'# '+evil,after:null,by:'both'}],disagreements:[{topic:evil,claude:evil,codex:evil}],risks:[evil]},objections:evil,created:null});
+  plan:{summary:evil},objections:evil,created:null});
 assert(!card.includes('<img'));
 assert(card.includes('&lt;img'));
 assert(card.includes('data-q-pending="3:3-1:WAITING_INPUT"'));
 assert(card.includes('data-bs-stop="7"'));
 assert(!card.includes('data-bs-create'),'Only a finished plan can create tasks');
 const ready=context.renderers.brainstormCard({id:'8',project_id:'p',goal:'g',phase:'ready',status:'READY',why:'',agents:{lead:'claude',other:'codex'},qa:[],questions:[],
-  plan:{summary:'s',tasks:[{id:'t1',title:'one',agent:'claude',scope:['src'],spec:'x',after:null,by:'codex'}]},objections:'',created:null});
-assert(ready.includes('data-bs-create="8"'));
-assert(ready.includes('What the agent will be given'));
+  plan:{summary:'s'},objections:'',created:null});
+assert(ready.includes('data-view="plans"')&&!ready.includes('data-bs-create'),'a finished brainstorm points to the Plans page');
 console.log('Brainstorm checks passed.');
 // One ask with several questions: each question gets its own choices and box, all text escaped.
 const ask=context.renderers.multiAsk([{question:'<b>1</b>',options:['stdin','<img src=x>']},{question:'format?',options:[]}],'data-q-task="9"');

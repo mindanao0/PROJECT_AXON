@@ -411,3 +411,8 @@ pre.conversation { white-space: pre-wrap; max-height: 70vh; overflow: auto; }
 .ask-from { margin: 6px 0 0; font-size: 12px; }
 .ask-from ul { margin: 4px 0 0; padding-left: 18px; }
 .ask-q textarea { width: 100%; margin-top: 8px; }
+.plan-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.plan-lane h3 { margin: 0 0 8px; font: 11px/1.4 var(--mono); text-transform: uppercase; color: #a99a9a; }
+.plan-item { border: 1px solid #3a1c1c; padding: 8px; margin-bottom: 8px; font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .plan-board { grid-template-columns: 1fr; } }
+.plan-phase { border-top: 1px solid #3a1c1c; margin-top: 14px; padding-top: 10px; }

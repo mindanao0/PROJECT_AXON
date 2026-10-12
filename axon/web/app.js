@@ -3,7 +3,7 @@ const $ = s => document.querySelector(s);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let token = new URLSearchParams(location.hash.slice(1)).get('token') || '';
 history.replaceState(null, '', location.pathname);
-let snapshot = null, cursor = 0, events = [], view = 'overview', project = 'all', search = '', stateFilter = 'all';
+let snapshot = null, cursor = 0, events = [], view = 'tasks', project = 'all', search = '', stateFilter = 'all';
 let connected = false, selectedTask = null, taskDetail = null, detailTab = 'results', detailSignature = '', polling = false, toastTimer;
 let eventTask = 'all', eventType = 'all', eventLimit = 100, confirmPending = false;
 let taskGroup = 'all', lastSyncAt = 0, commandResults = [], commandIndex = 0, clockOffset = 0;
@@ -15,8 +15,8 @@ function liveText(task) {
 }
 const live = task => task.running_since ? `<p class="queue-hint live-hint" data-live="${escapeHTML(task.id)}">${escapeHTML(liveText(task))}</p>` : '';
 const columnLimits = [12,12,12,12];
-const names = {overview:'Control room',tasks:'Task board',agents:'Your agents',activity:'Activity log',artifacts:'Artifacts',resources:'Resources',settings:'Runtime settings',chat:'Agent chat',brainstorm:'Brainstorm'};
-const subtitles = {overview:'Your directives. Your agents. Your control.',tasks:'Follow each task from queue to verified result.',agents:'Slots, cooldowns and available capabilities.',activity:'Trace decisions and controls for one task or the whole runtime.',artifacts:'Full results and verification evidence, tied to their attempt.',resources:'Dispatch capacity and measured resource availability.',settings:'Local transport, reconnect and current boundaries.',chat:'Claude, Codex or a shell in the sandbox: a real terminal. Select to copy, Ctrl+Shift+V to paste.',brainstorm:'Claude and Codex plan together first. Nothing runs until you create the tasks.'};
+const names = {tasks:'Control room',plans:'Plans',brainstorm:'Brainstorm',chat:'Agent chat',agents:'Your agents',activity:'Activity log',settings:'Runtime settings'};
+const subtitles = {tasks:'Follow each task from queue to verified result.',plans:'A finished brainstorm, followed task by task: what is waiting, running and done.',brainstorm:'Claude and Codex plan together first. Nothing runs until you create the tasks.',chat:'Claude, Codex or a shell in the sandbox: a real terminal. Select to copy, Ctrl+Shift+V to paste.',agents:'Slots, usage, cooldowns and available capabilities.',activity:'Trace decisions and controls for one task or the whole runtime.',settings:'Local transport, reconnect and current boundaries.'};
 const terminal = ['COMPLETED','FAILED','CANCELLED','BLOCKED'];
 const active = ['RUNNING','VERIFY','REVIEW','WAITING_INPUT','WAITING_APPROVAL','CANCELLING'];
 const attentionStates = ['WAITING_INPUT','WAITING_APPROVAL','WAITING_QUOTA','BLOCKED','REVIEW'];
@@ -174,7 +174,7 @@ async function poll() {
     $('#pause').disabled = false; $('#new-task').disabled = false;
     $('#add-project').hidden = false; $('#add-project').disabled = false;
     $('#runtime-banner').classList.toggle('real-mode',!simulation());
-    $('#nav-chat').hidden = simulation(); $('#nav-brainstorm').hidden = simulation();
+    $('#nav-chat').hidden = simulation(); $('#nav-brainstorm').hidden = simulation(); $('#nav-plans').hidden = simulation();
     $('#runtime-banner').innerHTML = simulation()
       ? '<span class="notice-icon" aria-hidden="true">◌</span><div><strong>Simulation workspace</strong><span>Fake-agent controls only. No repository files are changed.</span></div><span class="notice-badge">SIMULATION / 0.1</span>'
       : '<span class="notice-icon" aria-hidden="true">⌁</span><div><strong>Real runtime</strong><span>Controls and capabilities are provided by the active runner. Verify the task, attempt and diff before approval.</span></div><span class="notice-badge">REAL MODE</span>';
@@ -287,10 +287,6 @@ function limitBars(p) {
   const age = now - l.as_of;
   return `<div class="limits">${rows}<small>${age > 600 ? `as of ${ago(age)} ago · updates when ${escapeHTML(p.name)} runs` : `as of ${ago(age)} ago`}</small></div>`;
 }
-function agentPanel() {
-  const rows=providerItems().map(providerRow).join('');
-  return `<section class="panel"><div class="panel-header"><h2>Agent fleet</h2><button class="text-button" data-view="agents">View agents ↗</button></div>${simulation()?fakeAgentRow():''}${rows||empty('No providers reported','Provider status appears when the runtime supplies it.')}</section>`;
-}
 function eventList(limit=8, taskFilter='all', typeFilter='all', sourceEvents=events) {
   const relevant = sourceEvents.filter(e=>(project==='all'||e.project_id===project)&&(taskFilter==='all'||e.task_id===taskFilter)&&(typeFilter==='all'||e.type===typeFilter)).slice(-limit).reverse();
   return relevant.length ? `<div class="timeline">${relevant.map(e=>`<div class="event-row"><span class="event-mark" aria-hidden="true">${e.type==='STATE'?'↗':e.type==='CONTROL'?'Ⅱ':'◇'}</span><div class="event-body"><p>${escapeHTML(e.message)}</p><small>${escapeHTML(e.type)} / ${e.task_id?'NAV-'+escapeHTML(shortID(e.task_id)):'Runtime'} / #${e.seq}</small>${e.task_id?`<button class="text-button" data-task="${escapeHTML(e.task_id)}" data-open-output>Open task output ↗</button>`:''}${typeof e.output==='string'?`<details><summary>Full event output</summary><pre>${escapeHTML(e.output)}</pre></details>`:''}</div><span class="event-time">${date(e.time)}</span></div>`).join('')}</div>` : empty('No matching events','Events retained in the current browser session appear here. Earlier events remain in the database.','≋');
@@ -314,10 +310,6 @@ function artifactBlock(artifact, task, expanded=false) {
   const conversation = artifact.kind==='agent_log' && !String(artifact.id).startsWith('agent_log_raw');
   const body = conversation ? `<pre class="conversation">${String(artifact.content??'').split('\n').map(logLine).join('\n')}</pre>` : `<pre>${escapeHTML(artifact.content)}</pre>`;
   return `<details ${expanded&&!String(artifact.id).startsWith('agent_log_raw')?'open':''}><summary>${escapeHTML(artifact.name)} / ${artifact.simulated?'SIMULATED':'RUNTIME EVIDENCE'}</summary><small>Attempt ${escapeHTML(artifact.attempt_id)} / SHA-256 ${escapeHTML(artifact.hash||'not supplied')}</small>${body}<button class="text-button" data-copy-artifact="${escapeHTML(artifact.id)}" data-copy-task="${escapeHTML(task.id)}">Copy full result</button></details>`;
-}
-function artifacts(tasks) {
-  const items = tasks.flatMap(t=>t.artifacts.map(a=>({artifact:a,task:t})));
-  return items.length ? `<div class="artifacts">${items.map(({artifact,task})=>`<section class="panel artifact"><button class="text-button" data-task="${escapeHTML(task.id)}">${escapeHTML(task.title)} ↗</button><h3>${escapeHTML(artifact.name)}</h3><small>${escapeHTML(artifact.kind)} / attempt ${escapeHTML(artifact.attempt_id)} / ${escapeHTML(artifact.hash||'hash unavailable')}</small><p class="muted">Full content loads when you open this task.</p><button class="button secondary" data-task="${escapeHTML(task.id)}">Open artifact →</button></section>`).join('')}</div>` : `<section class="panel">${empty('No artifacts yet','Completed steps produce result and verification evidence.','◇')}</section>`;
 }
 function formatBytes(bytes) {
   if (!Number.isFinite(Number(bytes)) || Number(bytes)<0) return 'Not measured';
@@ -364,31 +356,29 @@ function restoreFocus(saved) {
 function render() {
   if (!snapshot) return;
   const focus = rememberFocus();
-  $('#command-masthead').hidden = view !== 'overview';
-  $('#page-title').textContent = names[view]; $('#page-subtitle').textContent = subtitles[view]; $('#view-label').textContent = view==='overview'?'Overview':names[view];
+  $('#command-masthead').hidden = view !== 'tasks';
+  $('#page-title').textContent = names[view]; $('#page-subtitle').textContent = subtitles[view]; $('#view-label').textContent = names[view];
   document.querySelectorAll('.sidebar .nav-item').forEach(b=>{b.classList.toggle('active',b.dataset.view===view);if(b.dataset.view===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
   $('#pause').textContent = snapshot.paused?'▷ Resume dispatch':'Ⅱ Pause dispatch';
   $('#nav-task-count').textContent = snapshot.tasks.length;
   $('#add-project').hidden = false;
   $('#project-list').innerHTML = `<button id="project-all" class="project-item ${project==='all'?'active':''}" data-project="all"><span class="project-dot" aria-hidden="true"></span><span>All projects</span></button>`+snapshot.projects.map(p=>`<button id="project-${escapeHTML(p.id)}" class="project-item ${project===p.id?'active':''}" data-project="${escapeHTML(p.id)}"><span class="project-dot" aria-hidden="true"></span><span>${escapeHTML(p.name)}</span></button>`).join('');
   const tasks = filteredTasks(); let html = '';
-  if (view==='overview'||view==='tasks') {
+  if (view==='tasks') {
     html = stats(tasks);
     html += integrationStrip();
     html += operatorQueue(tasks);
     html += `<div class="section-title"><h2>Task board <small>${project==='all'?'All projects':escapeHTML(snapshot.projects.find(p=>p.id===project)?.name)}</small></h2><button class="text-button" data-new-task>+ Create task</button></div>`;
-    if (view==='tasks') html += `<div class="board-toolbar"><input id="task-search" placeholder="Search tasks…" aria-label="Search tasks" value="${escapeHTML(search)}"><select id="group-filter" aria-label="Filter task group">${Object.entries(taskGroups).map(([id,label])=>`<option value="${id}" ${taskGroup===id?'selected':''}>${label}</option>`).join('')}</select><select id="state-filter" aria-label="Filter by state"><option value="all">All states</option>${[...new Set(snapshot.tasks.map(t=>t.state))].sort().map(s=>`<option ${s===stateFilter?'selected':''}>${escapeHTML(s)}</option>`).join('')}</select></div>`;
+    html += `<div class="board-toolbar"><input id="task-search" placeholder="Search tasks…" aria-label="Search tasks" value="${escapeHTML(search)}"><select id="group-filter" aria-label="Filter task group">${Object.entries(taskGroups).map(([id,label])=>`<option value="${id}" ${taskGroup===id?'selected':''}>${label}</option>`).join('')}</select><select id="state-filter" aria-label="Filter by state"><option value="all">All states</option>${[...new Set(snapshot.tasks.map(t=>t.state))].sort().map(s=>`<option ${s===stateFilter?'selected':''}>${escapeHTML(s)}</option>`).join('')}</select></div>`;
     html += board(tasks);
-    if (view==='overview') html += `<div class="lower-grid">${agentPanel()}<section class="panel"><div class="panel-header"><h2>Recent activity</h2><button class="text-button" data-view="activity">View audit log ↗</button></div>${eventList()}</section></div>`;
   } else if (view==='agents') {
     const fakeCard=simulation()?`<section class="panel agent-card">${fakeAgentRow()}<div class="capability-list"><span class="capability">Lifecycle simulation</span><span class="capability">Task cooldown</span><span class="capability">Source artifact references</span></div><p>Controls run in-process. A task cooldown releases the slot; it does not imply the whole fake provider is blocked.</p></section>`:'';
     const cards=providerItems().map(providerCard).join('');
-    html = `<div class="agent-grid">${fakeCard}${cards||`<section class="panel">${empty('No providers reported','Provider status appears when the runtime supplies it.')}</section>`}</div>`;
+    html = `<div class="agent-grid">${fakeCard}${cards||`<section class="panel">${empty('No providers reported','Provider status appears when the runtime supplies it.')}</section>`}</div>`+resourcePanel()+usagePanel();
   } else if (view==='activity') html = `<section class="panel event-log"><div class="panel-header"><h2>Runtime events</h2><span class="muted">Cursor ${cursor} / latest 1,000 retained in this tab</span></div>${eventToolbar(tasks)}${eventList(eventLimit,eventTask,eventType)}${eventLimit<1000?'<button class="text-button" id="more-events">Show more events</button>':''}</section>`;
-  else if (view==='artifacts') html = artifacts(tasks);
+  else if (view==='plans') html = simulation()?`<section class="panel">${empty('Not in the simulation','Plans come from Brainstorm, which needs the real runtime and your agents.')}</section>`:plansView();
   else if (view==='chat') {if ($('#chat-root')) return; html = chatPanel(); chatDisconnect(); chatSession='';}
   else if (view==='brainstorm') {if ($('#bs-root')) {bsRefresh(); updateAttention(null,snapshot); return;} html = simulation()?`<section class="panel">${empty('Not in the simulation','Brainstorm needs the real runtime and your agents.')}</section>`:brainstormPanel();}
-  else if (view==='resources') html = resourcePanel()+usagePanel();
   else html = settingsPanel();
   if (view!=='chat') chatDisconnect();
   $('#content').innerHTML = html; restoreFocus(focus); updateAttention(null,snapshot); updateCountdowns();
@@ -530,7 +520,8 @@ document.addEventListener('click',async e=>{
   const chatKey=e.target.closest('[data-chat-key]'); if (chatKey) {if (chatSocket?.readyState===1) chatSocket.send(JSON.stringify({data:(k=>typeof k==='function'?k():k)(chatKeys[Number(chatKey.dataset.chatKey)][0])})); chatTerm?.focus(); return;}
   const fill=e.target.closest('[data-ask-fill]'); if (fill) {const box=fill.closest('fieldset').querySelector('textarea'); box.value=fill.dataset.text; box.focus(); return;}
   const bsOpt=e.target.closest('[data-bs-opt]'); if (bsOpt) {bsOpt.disabled=true; await bsAnswer(bsOpt.dataset,bsOpt.dataset.text); bsOpt.disabled=false; return;}
-  const bsCreate=e.target.closest('[data-bs-create]'); if (bsCreate) {bsCreate.disabled=true; const r=await command({action:'brainstorm_create_tasks',brainstorm_id:bsCreate.dataset.bsCreate}); if (r) toast(`Queued ${Object.keys(r.task_ids).length} tasks.`); else bsCreate.disabled=false; return;}
+  const bsExpand=e.target.closest('[data-bs-expand]'); if (bsExpand) {bsExpand.disabled=true; if (await command({action:'brainstorm_expand',brainstorm_id:bsExpand.dataset.bsExpand,phase:bsExpand.dataset.bsPhase})) toast('The lead is breaking the phase into tasks.'); else bsExpand.disabled=false; return;}
+  const bsCreate=e.target.closest('[data-bs-create]'); if (bsCreate) {bsCreate.disabled=true; const body={action:'brainstorm_create_tasks',brainstorm_id:bsCreate.dataset.bsCreate,phase:bsCreate.dataset.bsPhase}; let r=await command(body); if (r&&r.warning) r=confirm(`${r.warning}\n\nStart anyway?`)?await command({...body,force:true}):null; if (r) toast(`Queued ${Object.keys(r.task_ids).length} tasks.`); else bsCreate.disabled=false; return;}
   const bsStop=e.target.closest('[data-bs-stop]'); if (bsStop) {if (confirm('Stop this brainstorm? Its agents stop; nothing is created.')) await command({action:'brainstorm_stop',brainstorm_id:bsStop.dataset.bsStop}); return;}
   if (e.target.closest('#bs-recommend')) {bsRecommend(); return;}
   const chatTab=e.target.closest('[data-chat-tab]'); if (chatTab) {chatConnect(chatTab.dataset.chatTab).then(chatTick);return;}
@@ -727,15 +718,8 @@ function brainstormCard(b) {
     if ((q.questions||[]).length) return `<section class="request-box"><h3>${escapeHTML(bsAgentName(q.agent))} asks you</h3>${multiAsk(q.questions,d)}</section>`;
     return `<section class="request-box"><h3>${escapeHTML(bsAgentName(q.agent))} asks you</h3><p>${escapeHTML(q.question)}</p>${(q.options||[]).length?`<div class="answer-options" role="group" aria-label="Choose an answer">${q.options.map(o=>`<button type="button" class="button secondary" data-bs-opt ${d} data-text="${escapeHTML(o)}">${escapeHTML(o)}</button>`).join('')}</div><p class="field-help">Or write your own answer:</p>`:''}<form class="bs-answer" ${d}><textarea name="text" data-bs-text="${escapeHTML(q.task_id)}" required maxlength="2000" rows="2" aria-label="Your answer"></textarea><button class="button primary" type="submit">Send answer →</button></form></section>`;}).join('');
   const qa=(b.qa||[]).length?`<details><summary>Your answers so far (${b.qa.length})</summary><ul class="queue-reasons">${b.qa.map(x=>`<li><strong>${escapeHTML(bsAgentName(x.by))}</strong> asked: ${escapeHTML(x.q)}<br><span class="muted">${escapeHTML(x.a)}</span></li>`).join('')}</ul></details>`:'';
-  let body='';
-  if (plan) {
-    const made=b.created||{};
-    body=`<p>${escapeHTML(plan.summary||'')}</p><table class="usage-table"><thead><tr><th>Task</th><th>Agent</th><th>Proposed by</th><th>Scope</th><th>After</th></tr></thead><tbody>${plan.tasks.map(t=>`<tr><td><strong>${escapeHTML(t.id)}</strong> ${escapeHTML(t.title)}<br><details><summary>What the agent will be given</summary><pre class="bs-brief">${escapeHTML(t.brief||t.spec||'')}</pre></details></td><td>${escapeHTML(t.agent)}</td><td><span class="badge">${escapeHTML(t.by||'?')}</span></td><td>${escapeHTML((t.scope||[]).join(', '))}</td><td>${escapeHTML(t.after||'')}${made[t.id]?` <button class="text-button" data-task="${escapeHTML(made[t.id])}">task ${escapeHTML(made[t.id])} ↗</button>`:''}</td></tr>`).join('')}</tbody></table>`;
-    if ((plan.disagreements||[]).length) body+=`<h3>They disagree: you decide</h3><ul class="queue-reasons">${plan.disagreements.map(x=>`<li><strong>${escapeHTML(x.topic)}</strong><br>Claude: ${escapeHTML(x.claude)}<br>Codex: ${escapeHTML(x.codex)}</li>`).join('')}</ul>`;
-    if ((plan.risks||[]).length) body+=`<h3>Risks</h3><ul class="queue-reasons">${plan.risks.map(r=>`<li>${escapeHTML(r)}</li>`).join('')}</ul>`;
-    if (b.objections) body+=`<div class="review-callout"><strong>The checker still objects</strong><span>${escapeHTML(b.objections).replaceAll('\n','<br>')}</span></div>`;
-  }
-  const act=b.status==='READY'?`<button class="button primary" data-bs-create="${escapeHTML(b.id)}">Create these ${plan.tasks.length} tasks</button>`:b.status==='ACTIVE'?`<button class="button danger" data-bs-stop="${escapeHTML(b.id)}">Stop</button>`:'';
+  const body=plan?`<p>${escapeHTML(plan.summary||'')}</p>`:'';
+  const act=b.status==='ACTIVE'?`<button class="button danger" data-bs-stop="${escapeHTML(b.id)}">Stop</button>`:plan?`<button class="button primary" data-view="plans">${b.status==='READY'?'Review the plan':'Follow the plan'} →</button>`:'';
   return `<section class="panel bs-card"><div class="panel-header"><h2>#${escapeHTML(b.id)} ${escapeHTML(b.goal.trim().split('\n')[0].slice(0,120))}</h2>${badge(b.status)}</div><p class="muted">${escapeHTML(b.project_id)} / lead ${escapeHTML(bsAgentName(b.agents.lead))}, other ${escapeHTML(bsAgentName(b.agents.other))}</p><ol class="bs-steps" aria-label="Phase">${steps}</ol>${b.why?`<p class="form-error">${escapeHTML(b.why)}</p>`:''}${asks}${qa}${body}<div class="detail-actions">${act}</div></section>`;
 }
 function bsRefresh() {
@@ -764,6 +748,35 @@ $('#content').addEventListener('submit', async e => {
     e.preventDefault(); const box=e.target.querySelector('textarea'); await bsAnswer(e.target.dataset,box.value.trim()); box.value='';
   }
 });
+// Plans: a finished brainstorm followed task by task. The lanes come from the real tasks the plan created; PLAN.md is for you, plan.json for an agent.
+const planLanes = {todo:'To do',doing:'In progress',done:'Done',stuck:'Stuck'};
+const planLane = task => !task ? 'todo' : task.state==='COMPLETED' ? 'done' : ['FAILED','CANCELLED','BLOCKED'].includes(task.state) ? 'stuck' : active.includes(task.state) ? 'doing' : 'todo';
+function plansView() {
+  const items=(snapshot.brainstorms||[]).filter(b=>b.plan&&(project==='all'||b.project_id===project));
+  return items.map(planCard).join('')||`<section class="panel">${empty('No plans yet','A finished Brainstorm shows up here.')}</section>`;
+}
+function planCard(b) {
+  const plan=b.plan, made=b.created||{}, byID=Object.fromEntries(snapshot.tasks.map(t=>[t.id,t]));
+  const all=plan.phases.flatMap(ph=>ph.tasks.map(pt=>({pt,task:byID[made[pt.id]]}))), done=all.filter(c=>planLane(c.task)==='done').length;
+  const item=({pt,task})=>`<div class="plan-item"><strong>${escapeHTML(pt.id)}</strong> ${escapeHTML(pt.title)}<br><span class="muted">${escapeHTML(pt.agent)}, scope ${escapeHTML((pt.scope||[]).join(', ')||'-')}${[].concat(pt.after||[]).length?`, after ${escapeHTML([].concat(pt.after).join(', '))}`:''}</span>${task?`<br>${badge(task.state)} <button class="text-button" data-task="${escapeHTML(task.id)}">task ↗</button>`:''}<details><summary>Done when</summary><ul class="queue-reasons">${(pt.acceptance||[]).map(x=>`<li>${escapeHTML(x)}</li>`).join('')}</ul></details><details><summary>What the agent is given</summary><pre class="bs-brief">${escapeHTML(pt.brief||'')}</pre></details></div>`;
+  const phase=ph=>{
+    const cards=ph.tasks.map(pt=>({pt,task:byID[made[pt.id]]}));
+    const lanes=cards.length?`<div class="plan-board">${Object.entries(planLanes).map(([l,label])=>{const mine=cards.filter(c=>planLane(c.task)===l);return `<div class="plan-lane"><h3>${label} <small>${mine.length}</small></h3>${mine.map(item).join('')}</div>`;}).join('')}</div>`:'';
+    const act=ph.expanding?`<p class="muted">The lead is breaking this phase into tasks … <button class="text-button" data-bs-stop="${escapeHTML(b.id)}">Stop</button></p>`
+      :ph.started?(ph.failed?`<button class="button primary" data-bs-create="${escapeHTML(b.id)}" data-bs-phase="${escapeHTML(ph.id)}">Retry phase ${escapeHTML(ph.id)}: make the ${ph.failed} failed or stopped task${ph.failed>1?'s':''} again</button>`:'')
+      :!ph.ready?'':ph.tasks.length?`<button class="button primary" data-bs-create="${escapeHTML(b.id)}" data-bs-phase="${escapeHTML(ph.id)}">Start phase ${escapeHTML(ph.id)}: create these ${ph.tasks.length} tasks</button>`
+      :`<button class="button primary" data-bs-expand="${escapeHTML(b.id)}" data-bs-phase="${escapeHTML(ph.id)}">Break phase ${escapeHTML(ph.id)} into tasks</button>`;
+    const state=ph.done?'COMPLETED':ph.started?'RUNNING':ph.ready?'READY':'QUEUED';
+    return `<section class="plan-phase"><div class="panel-header"><h3>Phase ${escapeHTML(ph.id)}: ${escapeHTML(ph.title)}</h3>${badge(state)}</div><p>${escapeHTML(ph.objective||'')}</p>${(ph.done_when||[]).length?`<details><summary>Phase done when</summary><ul class="queue-reasons">${ph.done_when.map(x=>`<li>${escapeHTML(x)}</li>`).join('')}</ul></details>`:''}${lanes}<div class="detail-actions">${act}</div></section>`;
+  };
+  const files=b.files?.human?`<p class="muted">For you: <code>${escapeHTML(b.files.human)}</code><br>For an agent: <code>${escapeHTML(b.files.ai)}</code></p>`:'';
+  let extra=b.expand_error?`<p class="form-error">${escapeHTML(b.expand_error)}</p>`:'';
+  if ((plan.disagreements||[]).length) extra+=`<h3>They disagree: you decide</h3><ul class="queue-reasons">${plan.disagreements.map(x=>`<li><strong>${escapeHTML(x.topic)}</strong><br>Claude: ${escapeHTML(x.claude)}<br>Codex: ${escapeHTML(x.codex)}</li>`).join('')}</ul>`;
+  if ((plan.risks||[]).length) extra+=`<h3>Risks</h3><ul class="queue-reasons">${plan.risks.map(r=>`<li>${escapeHTML(r)}</li>`).join('')}</ul>`;
+  if (b.objections) extra+=`<div class="review-callout"><strong>The checker still objects</strong><span>${escapeHTML(b.objections).replaceAll('\n','<br>')}</span></div>`;
+  const phasesDone=plan.phases.filter(ph=>ph.done).length, state=phasesDone===plan.phases.length?'COMPLETED':b.status==='READY'&&!plan.phases.some(ph=>ph.started)?'READY':'RUNNING';
+  return `<section class="panel bs-card"><div class="panel-header"><h2>#${escapeHTML(b.id)} ${escapeHTML(b.goal.trim().split('\n')[0].slice(0,120))}</h2>${badge(state)}</div><p class="muted">${escapeHTML(b.project_id)}: ${done} / ${all.length} written tasks done, ${phasesDone} / ${plan.phases.length} phases</p><meter min="0" max="${all.length||1}" value="${done}" aria-label="Tasks done"></meter><p>${escapeHTML(plan.summary||'')}</p>${files}${extra}${plan.phases.map(phase).join('')}</section>`;
+}
 // Chat: a real terminal (xterm.js, loaded on first use) on the agent's tmux session over a WebSocket.
 let chatSession = '', chatTerm = null, chatFit = null, chatSocket = null, chatLoading = null;
 // For phones and keys the browser keeps: each button types its terminal sequence.

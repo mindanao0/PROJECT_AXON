@@ -62,7 +62,7 @@ DEFAULTS = {
                "claude_mode": "interactive", "codex_mode": "headless"},
     # A brainstorm (D-035): who leads, review rounds, and model/effort per agent ("" = the [agents] setting): the main one
     # for drafting, comparing and merging, *_light_* for the steps that only ask and check, *_gate_* for merging the agents' questions
-    # (falls back to light); the merge step's own effort.
+    # (falls back to light); merge_effort is also the effort of the step that breaks a phase into tasks.
     "brainstorm": {"lead": "claude", "other": "codex", "rounds": 1, "merge_effort": "",
                    **{f"{a}_{k}": "" for a in ("claude", "codex") for k in ("model", "effort", "light_model", "light_effort", "gate_model", "gate_effort")}},
     "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
@@ -297,9 +297,15 @@ ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd, "local":
 
 # User commands
 
+def deps_of(t):
+    """Ids of the tasks a task waits for: `after` first, then `needs`."""
+    return ([] if t["after"] is None else [t["after"]]) + json.loads(t["needs"] or "[]")
+
+
 def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", source=None, kind="", target=None,
-             after=None, parent=None, round=0, checks=None, model=None, effort=None):
-    """Queue a task. Returns (task id, None), or (None, id of the live duplicate)."""
+             after=None, parent=None, round=0, checks=None, model=None, effort=None, needs=()):
+    """Queue a task. Returns (task id, None), or (None, id of the live duplicate). It starts when `after` and every task in
+    `needs` are COMPLETED, from the result of `after`, or from all of them merged when there are several."""
     if agent not in ADAPTERS:
         raise ValueError(f"unknown agent {agent!r}; choose from {', '.join(ADAPTERS)}")
     if agent == "local" and not load_config()["local"]["coding"]:
@@ -315,19 +321,20 @@ def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", sourc
         unknown = [c for c in checks if c not in proj["checks"]]
         if unknown or not checks:
             raise ValueError(f"unknown check(s) {', '.join(unknown) or '(none given)'}; available: {', '.join(proj['checks']) or 'none'}")
-    if after is not None:  # starts from that task's result once it is COMPLETED
-        dep = store.one("select project, kind from tasks where id = ?", after)
+    needs = sorted({int(n) for n in needs or ()} - {after})
+    for dep_id in ([after] if after is not None else []) + needs:  # starts from the result(s) once COMPLETED
+        dep = store.one("select project, kind from tasks where id = ?", dep_id)
         if not dep or dep["project"] != project or dep["kind"]:
             raise ValueError("after must be an implementation task in the same project")
-    salt = ((f"+after{after}" if after is not None else "") + (f"+checks{','.join(checks)}" if checks else "")
+    salt = ((f"+after{after}" if after is not None else "") + (f"+needs{','.join(map(str, needs))}" if needs else "") + (f"+checks{','.join(checks)}" if checks else "")
             + (f"+model{model}" if model else "") + (f"+effort{effort}" if effort else ""))
     key, now = task_key(project, spec, scope, sha + salt), time.time()
     try:
-        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, checks, model, effort)"
-                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?,?,?)",
+        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, checks, model, effort, needs)"
+                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?,?,?,?)",
                          project, agent, spec, title or spec.strip().splitlines()[0][:80],
                          json.dumps(source) if source else "", json.dumps(scope), key, sha, now, now, kind, target,
-                         after, parent, round, json.dumps(checks) if checks else None, model, effort)
+                         after, parent, round, json.dumps(checks) if checks else None, model, effort, json.dumps(needs) if needs else None)
     except sqlite3.IntegrityError:
         dup = store.one("select id from tasks where key = ? and status not in ('FAILED', 'CANCELLED')", key)
         return None, dup["id"]
@@ -710,8 +717,8 @@ class Runtime:
                 return False
             if sum(r["agent"] == t["agent"] for r in running) >= self.cfg["slots"].get(t["agent"], 1):
                 return False
-            if t["after"] is not None:
-                dep = s.one("select status from tasks where id = ?", t["after"])
+            for dep_id in deps_of(t):
+                dep = s.one("select status from tasks where id = ?", dep_id)
                 if not dep or dep["status"] != "COMPLETED":
                     return False  # waits (a failed dependency keeps it queued; the GUI says why)
             mine = json.loads(t["scope"])
@@ -725,13 +732,33 @@ class Runtime:
                 break
             cands.remove(t)
             if s.move(t["id"], "RUNNING", ("QUEUED", "WAITING_QUOTA")):
-                if t["after"] is not None and not t["head"]:  # start from the dependency's result
-                    s.x("update tasks set base = (select head from tasks where id = ?) where id = ?", t["after"], t["id"])
+                if deps_of(t) and not t["head"]:  # start from the dependencies' result
+                    try:
+                        base = self._dependency_base(t)
+                    except ValueError as e:
+                        s.move(t["id"], "FAILED", ("RUNNING",), note=str(e)[:500])
+                        continue
+                    s.x("update tasks set base = ? where id = ?", base, t["id"])
                 running.append(t)
                 th = threading.Thread(target=self._run_attempt, args=(t["id"],), daemon=True)
                 self.threads.append(th)
                 th.start()
         self.threads = [th for th in self.threads if th.is_alive()]
+
+    def _dependency_base(self, t):
+        """The commit a task with dependencies starts from: the result of `after`, with the results of `needs` merged in."""
+        from . import integrate
+        path = load_project(t["project"])["path"]
+        heads = [s["head"] for s in (self.store.one("select head from tasks where id = ?", i) for i in deps_of(t))]
+        base = heads[0]
+        for h in heads[1:]:
+            if integrate.ancestor(path, h, base):
+                continue
+            base, conflicts = integrate.merge(path, base, h, f"axon: base of task {t['id']}")
+            if conflicts:
+                raise ValueError(f"the results this task builds on conflict in: {', '.join(conflicts)}")
+        integrate.git(path, "update-ref", f"refs/axon/bases/{t['id']}", base)  # keeps the merge commit from being collected
+        return base
 
     def busy(self):
         return bool(self.threads) or bool(self.store.one(

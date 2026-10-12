@@ -27,7 +27,7 @@ axon                               # เปิด GUI (ถ้ารันอย�
 ```
 
 - ผลงานยังเข้า `refs/axon/attempts/*` เหมือนเดิม และเลือกลง folder จริงได้: ปุ่ม **Apply to my folder** ใน GUI, `axon apply ID` หรือใส่ `auto_apply = true` ในไฟล์ project ให้ลงเองทุกงานที่ผ่าน checks; ถ้าคุณแก้บรรทัดเดียวกันอยู่ มันจะไม่เขียนอะไรเลย
-- **Brainstorm** (หน้า Brainstorm หรือ `axon brainstorm`): Claude กับ Codex ถามคุณให้ครบ (ห้ามเดา) ร่างแผนแยกกัน เทียบกัน รวมเป็นแผนเดียว และให้อีกฝั่งตรวจ งานจริงเกิดเมื่อคุณกดสร้างเท่านั้น ตั้ง model/effort แยกขั้นเบา/หนักได้ในส่วน `[brainstorm]` ของ config
+- **Brainstorm** (หน้า Brainstorm หรือ `axon brainstorm`): Claude กับ Codex ถามคุณให้ครบ (ห้ามเดา) ร่างแผนแยกกัน เทียบกัน รวมเป็นแผนเดียว และให้อีกฝั่งตรวจ เมื่อแผนพร้อม Axon เขียน `PLAN.md` (ให้คนอ่าน) กับ `plan.json` (ให้ agent อ่าน) จากแผนเดียวกัน แผนใหญ่แบ่งเป็น phase (เกิน 25 งานจะยังไม่เขียน task: กด Break into tasks ทีละ phase เมื่อ phase ก่อนเสร็จ ให้ lead เขียนจากโค้ดและผลจริง) แล้วหน้า **Plans** เป็นกระดานตามงานตามแผนว่าอะไรรอ/กำลังทำ/เสร็จแล้ว งานจริงเกิดเมื่อคุณกดสร้างเท่านั้น (ถ้า checks ของโปรเจกต์แดงอยู่แล้ว Axon จะถามก่อน; phase ที่มีงานล้มกด Retry ทำเฉพาะงานนั้นซ้ำได้) ตั้ง model/effort แยกขั้นเบา/หนักได้ในส่วน `[brainstorm]` ของ config
 - Agent chat ใน GUI เป็น terminal จริง (xterm.js ต่อ WebSocket เข้า tmux) พิมพ์แล้วเห็นทันที สีและเมนูเหมือน terminal ปุ่ม Esc/Tab/↑↓/Ctrl-C มีให้กดบนมือถือ
 - Chat ของ claude/codex ใช้ `~/.claude`, `~/.claude.json`, `~/.codex` ของคุณเอง (login, settings และประวัติชุดเดียวกับที่ใช้นอก Axon; **chat ไม่มี sandbox**: agent รันเป็นคุณในโฟลเดอร์โปรเจกต์จริง เห็นและแก้ไฟล์เดียวกับ terminal ปกติ รวมถึง home, credential และ git push; จำกัดแค่หน่วยความจำ `chat_memory` ผ่าน systemd scope) `/resume` จึงเห็น session เดิมของโปรเจกต์ ส่วนงาน (task) ยังใช้ home แยกของ Axon
 - Agent chat มีตัวเลือก **Shell**: bash ธรรมดาในโฟลเดอร์โปรเจกต์ (home จริงของคุณ, มีเน็ต) ใช้ได้เหมือน terminal ปกติ: ปุ่มทุกปุ่ม สี resize, ลากเลือกข้อความ = copy ลง clipboard, **Ctrl+Shift+V** = paste (Ctrl+V ส่งให้โปรแกรมเหมือน terminal บน Linux), wheel หรือปัดนิ้วบนจอ/ปุ่ม Scroll ▲▼ เลื่อนย้อน
@@ -40,7 +40,7 @@ axon                               # เปิด GUI (ถ้ารันอย�
   ```
 
   ใช้ได้ทั้งงานและ chat; ห้าม home ทั้งก้อน, state ของ Axon, ตัว repo เอง และ folder credential เช่น `~/.ssh`
-- Agent fleet (หน้า Overview) แสดง limit ที่เหลือของ subscription ช่วง 5 ชม. และรายสัปดาห์ของ Claude/Codex เป็น % (provider ไม่บอกเป็นจำนวน token): Claude อ่านสดทุกนาทีขณะ login ของมันยังไม่หมดอายุ (อายุ 8 ชม. หลัง Claude รันครั้งล่าสุด) นอกนั้นแสดงค่าล่าสุด; Codex เป็นค่าหลัง turn ล่าสุดที่รันผ่าน Axon
+- Agent fleet (หน้า Agents) แสดง limit ที่เหลือของ subscription ช่วง 5 ชม. และรายสัปดาห์ของ Claude/Codex เป็น % (provider ไม่บอกเป็นจำนวน token): Claude อ่านสดทุกนาทีขณะ login ของมันยังไม่หมดอายุ (อายุ 8 ชม. หลัง Claude รันครั้งล่าสุด) นอกนั้นแสดงค่าล่าสุด; Codex เป็นค่าหลัง turn ล่าสุดที่รันผ่าน Axon
 - งานที่กำลังวิ่ง: การ์ดและหน้า task บอก “running 3m · last output 5s ago” และเปิดแท็บ Agent output ให้เองซึ่งอัปเดตสด; เงียบเกิน 5 นาทีจะเตือนให้เข้าไปดู
 
 ### ให้รันตลอด (ทำเครื่องนี้เป็น server)

@@ -31,6 +31,29 @@ class Dependencies(AxonTest):
         self.assertGreaterEqual(started[b], ended[a])
         self.assertEqual(self.shown(f"{b}-1", "src/a/x.py"), "x\n")  # b's checkout contained a's work
 
+    def test_a_task_that_needs_several_results_starts_from_all_of_them_merged(self):
+        a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
+        b = self.add(edit("src/b/y.py") + DONE, scope=["src/b"])
+        c, dup = runtime.add_task(self.store, "p", "fake", edit("src/c/z.py") + DONE, ["src/c"], after=a, needs=[b])
+        self.assertIsNone(dup)
+        self.run_all()
+        self.assertEqual(self.task(c)["status"], "COMPLETED")
+        self.assertNotIn(self.task(c)["base"], (self.task(a)["head"], self.task(b)["head"]))  # a merge of both
+        self.assertEqual((self.shown(f"{c}-1", "src/a/x.py"), self.shown(f"{c}-1", "src/b/y.py")), ("x\n", "x\n"))
+
+    def test_results_that_conflict_fail_the_dependent_with_the_files(self):
+        a = self.add(edit("src/a/x.py", "one\n") + edit("shared.txt", "one\n") + DONE, scope=["src/a", "shared.txt"])
+        b = self.add(edit("src/b/y.py") + edit("shared.txt", "two\n") + DONE, scope=["src/b", "shared.txt"])
+        c, _ = runtime.add_task(self.store, "p", "fake", DONE, ["src/c"], after=a, needs=[b])
+        end = time.time() + 20
+        while time.time() < end and self.task(c)["status"] != "FAILED":
+            self.rt.tick()
+            time.sleep(0.2)
+        for th in self.rt.threads:
+            th.join(20)
+        self.assertEqual(self.task(c)["status"], "FAILED")
+        self.assertIn("shared.txt", self.task(c)["note"])
+
     def test_a_failed_dependency_keeps_the_dependent_queued_and_unstarted(self):
         a = self.add(step("crash", code=3), scope=["src/a"])
         b = self.add_after(edit("src/b/y.py") + DONE, ["src/b"], a)

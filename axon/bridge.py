@@ -267,10 +267,10 @@ class Bridge:
                     reasons.append({"code": "scope", "task_id": str(o["id"]), "message": f"Scope held by {o['title'] or 'task ' + str(o['id'])}"})
             if c["busy"].get(t["agent"], 0) >= slots.get(t["agent"], 1):
                 reasons.append({"code": "slot", "message": f"{t['agent']} slots full ({c['busy'][t['agent']]}/{slots.get(t['agent'], 1)})"})
-            dep = t["after"] is not None and c["by_id"].get(t["after"])
-            if dep and dep["status"] != "COMPLETED":
-                reasons.append({"code": "dependency", "task_id": str(dep["id"]),
-                                "message": f"Waiting for task {dep['id']} to complete (it is {dep['status']})"})
+            for dep in filter(None, (c["by_id"].get(i) for i in runtime.deps_of(t))):
+                if dep["status"] != "COMPLETED":
+                    reasons.append({"code": "dependency", "task_id": str(dep["id"]),
+                                    "message": f"Waiting for task {dep['id']} to complete (it is {dep['status']})"})
             reasons = reasons or [{"code": "ready", "message": "Ready for the next dispatch tick"}]
         elif state == "WAITING_QUOTA":
             reasons.append({"code": "cooldown", "until": c["cool"].get(t["agent"], t["updated"]), "message": f"{t['agent']} quota cooldown"})
@@ -289,7 +289,7 @@ class Bridge:
                        "questions": runtime.ask_questions(self.store, tid) if state == "WAITING_INPUT" else []}
         return {
             "model": t["model"], "effort": t["effort"], "checks": json.loads(t["checks"]) if t["checks"] else None,
-            "held_by": str(held) if held else None, "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
+            "held_by": str(held) if held else None, "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "needs": [str(i) for i in json.loads(t["needs"] or "[]")], "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
             "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
             "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
@@ -453,7 +453,7 @@ class Bridge:
             except (ValueError, subprocess.CalledProcessError) as e:
                 raise ControlError(f"Cannot start: {e}"[:300])
             return {"brainstorm_id": str(bid)}
-        if action in ("brainstorm_create_tasks", "brainstorm_stop", "brainstorm_answer"):
+        if action in ("brainstorm_create_tasks", "brainstorm_expand", "brainstorm_stop", "brainstorm_answer"):
             try:
                 bid = int(p.get("brainstorm_id"))
                 if action == "brainstorm_answer":
@@ -462,7 +462,12 @@ class Bridge:
                 if action == "brainstorm_stop":
                     brainstorm.cancel(s, bid)
                     return {"ok": True}
-                return {"task_ids": {k: str(v) for k, v in brainstorm.create_tasks(s, bid).items()}}
+                if action == "brainstorm_expand":
+                    brainstorm.expand(s, bid, p.get("phase") or None)
+                    return {"ok": True}
+                if not p.get("force") and (why := brainstorm.baseline_error(self.rt, bid)):
+                    return {"warning": why}  # the screen asks the user whether to start anyway
+                return {"task_ids": {k: str(v) for k, v in brainstorm.create_tasks(s, bid, p.get("phase") or None).items()}}
             except (TypeError, ValueError, subprocess.CalledProcessError) as e:
                 raise ControlError(str(e)[:300])
         if action == "update_settings":

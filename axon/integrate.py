@@ -64,6 +64,13 @@ def run_checks(rt, t, proj, commit, tip, names=None):
         shutil.rmtree(repo.parent, ignore_errors=True)
 
 
+def baseline(rt, project):
+    """Names of the project's checks that already fail on its HEAD."""
+    proj = runtime.load_project(project)
+    head = git(proj["path"], "rev-parse", "--verify", "HEAD")[1]
+    return [n for n, rc, _ in run_checks(rt, {"id": "baseline", "project": project, "checks": None, "approved": 1}, proj, head, head) if rc]
+
+
 def integrate(rt, tid):
     """Merge a COMPLETED task's result into the integration branch if the checks pass on the merged commit."""
     try:
@@ -92,9 +99,10 @@ def _integrate(rt, tid):
                 raise IntegrationError(f"your branch and the integration branch conflict in: {', '.join(conflicts)}")
         if ancestor(path, t["head"], tip):
             raise IntegrationError("this result is already in the integration branch")
-        dep = t["after"] is not None and s.one("select head from tasks where id = ?", t["after"])
-        if dep and dep["head"] and not ancestor(path, dep["head"], tip):
-            raise IntegrationError(f"this task builds on task {t['after']}; integrate that first")
+        for dep_id in runtime.deps_of(t):
+            dep = s.one("select head from tasks where id = ?", dep_id)
+            if dep and dep["head"] and not ancestor(path, dep["head"], tip):
+                raise IntegrationError(f"this task builds on task {dep_id}; integrate that first")
         if ancestor(path, tip, t["head"]):
             new = t["head"]
         else:

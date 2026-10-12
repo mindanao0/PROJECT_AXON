@@ -284,20 +284,27 @@ def show_brainstorm(store, bid):
     plan = b["plan"]
     if plan:
         print(f"\nplan: {plan.get('summary', '')}")
-        for t in plan["tasks"]:
-            print(f"  {t['id']}  [{t['agent']}, by {t.get('by', '?')}]  {t['title']}  scope {','.join(t['scope'])}"
-                  + (f"  after {t['after']}" if t.get("after") else ""))
+        for ph in plan["phases"]:
+            state = "done" if ph["done"] else "started" if ph["started"] else "breaking down ..." if ph["expanding"] else "" if ph["tasks"] else "no tasks yet"
+            print(f"  phase {ph['id']}: {ph['title']}  {state}")
+            for t in ph["tasks"]:
+                print(f"    {t['id']}  [{t['agent']}, by {t.get('by', '?')}]  {t['title']}  scope {','.join(t['scope'])}"
+                      + (f"  after {t['after']}" if t.get("after") else ""))
+        if b["expand_error"]:
+            print(f"\n{b['expand_error']}")
         for dsg in plan.get("disagreements") or []:
             print(f"  disagree: {dsg.get('topic')}\n    claude: {dsg.get('claude')}\n    codex: {dsg.get('codex')}")
         for r in plan.get("risks") or []:
             print(f"  risk: {r}")
         if b["objections"]:
             print(f"\nthe checker still objects:\n{b['objections']}")
+        if b["files"]:
+            print(f"\nfiles: {b['files'].get('human')}  (for you)   {b['files'].get('ai')}  (for an agent)")
         if b["status"] == "READY":
             print("\nwhat each agent will be given (approve means exactly this):")
-            for t in plan["tasks"]:
+            for t in (t for ph in plan["phases"] for t in ph["tasks"]):
                 print(f"\n[{t['id']}] " + t["brief"].replace("\n", "\n    "))
-            print(f"\ncreate these tasks: axon brainstorm {b['id']} --approve")
+            print(f"\nbreak the next phase into tasks: axon brainstorm {b['id']} --expand    start it: axon brainstorm {b['id']} --approve")
         elif b["created"]:
             print("\ncreated tasks:", ", ".join(f"{k} -> {v}" for k, v in b["created"].items()))
 
@@ -325,8 +332,13 @@ def brainstorm_cmd(store, a):
                     answers.append(q["options"][int(x) - 1] if q["options"] and x.isdigit() and 1 <= int(x) <= len(q["options"]) else x)
                 brainstorm.answer_gate(store, bid, answers)
                 print("sent to both agents")
+            elif a.expand:
+                brainstorm.expand(store, bid, None if a.expand == "next" else a.expand)
+                print("the lead is breaking the phase into tasks; look with: axon brainstorm", bid)
             elif a.approve:
-                print("queued:", ", ".join(f"{k} -> task {v}" for k, v in brainstorm.create_tasks(store, bid).items()))
+                if not a.force and (why := brainstorm.baseline_error(runtime.Runtime(store), bid)):
+                    sys.exit(why + " (--force)")
+                print("queued:", ", ".join(f"{k} -> task {v}" for k, v in brainstorm.create_tasks(store, bid, a.phase).items()))
             else:
                 show_brainstorm(store, bid)
         except ValueError as e:
@@ -377,7 +389,10 @@ def main(argv=None):
         for k in ("model", "effort", "light-model", "light-effort"):
             bs.add_argument(f"--{role}-{k}", default="", help=f"{k.replace('-', ' ')} for the {role} in this brainstorm only"
                             + (" (the steps that only ask and check)" if "light" in k else ""))
-    bs.add_argument("--approve", action="store_true", help="turn a finished plan into queued tasks")
+    bs.add_argument("--approve", action="store_true", help="turn a phase of a finished plan into queued tasks (--phase ID; default: the first not started)")
+    bs.add_argument("--phase", help="the phase --approve starts (a started one: makes its failed or stopped tasks again)")
+    bs.add_argument("--force", action="store_true", help="--approve even though the project's checks already fail")
+    bs.add_argument("--expand", nargs="?", const="next", metavar="PHASE", help="have the lead break a phase into tasks (default: the first not started)")
     bs.add_argument("--answer", action="store_true", help="answer the merged questions both agents are waiting on")
     bs.add_argument("--stop", action="store_true", help="stop a running brainstorm")
     sub.add_parser("ls", help="list tasks (running ones show how long and when they last wrote output)")
