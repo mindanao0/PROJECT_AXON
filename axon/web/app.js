@@ -273,7 +273,7 @@ function providerRow(item) {
 }
 function providerCard(item) {
   const p=item.provider;
-  return `<section class="panel agent-card">${providerRow(item)}<div class="capability-list"><span class="capability">${escapeHTML(p?.capability||'Status supplied by runtime')}</span></div><p>${escapeHTML(p?.message||'Rate-limit state appears here when the runtime reports a provider cooldown.')}</p></section>`;
+  return `<section class="panel agent-card">${providerRow(item)}<div class="capability-list"><span class="capability">${escapeHTML(p?.capability||'Status supplied by runtime')}</span></div><p>${escapeHTML(p?.message||'Rate-limit state appears here when the runtime reports a provider cooldown.')}</p>${p?.status==='Cooldown'&&!simulation()?`<button class="button secondary" data-cooldown-clear="${escapeHTML(p.id)}">Retry now: the quota is back</button>`:''}</section>`;
 }
 // What is left of the subscription's 5-hour and weekly windows (the providers report percent used, not tokens).
 function limitBars(p) {
@@ -522,6 +522,7 @@ document.addEventListener('click',async e=>{
   const bsOpt=e.target.closest('[data-bs-opt]'); if (bsOpt) {bsOpt.disabled=true; await bsAnswer(bsOpt.dataset,bsOpt.dataset.text); bsOpt.disabled=false; return;}
   const bsExpand=e.target.closest('[data-bs-expand]'); if (bsExpand) {bsExpand.disabled=true; if (await command({action:'brainstorm_expand',brainstorm_id:bsExpand.dataset.bsExpand,phase:bsExpand.dataset.bsPhase})) toast('The lead is breaking the phase into tasks.'); else bsExpand.disabled=false; return;}
   const bsCreate=e.target.closest('[data-bs-create]'); if (bsCreate) {bsCreate.disabled=true; const body={action:'brainstorm_create_tasks',brainstorm_id:bsCreate.dataset.bsCreate,phase:bsCreate.dataset.bsPhase}; let r=await command(body); if (r&&r.warning) r=confirm(`${r.warning}\n\nStart anyway?`)?await command({...body,force:true}):null; if (r) toast(`Queued ${Object.keys(r.task_ids).length} tasks.`); else bsCreate.disabled=false; return;}
+  const cdClear=e.target.closest('[data-cooldown-clear]'); if (cdClear) {cdClear.disabled=true; await command({action:'cooldown_clear',agent:cdClear.dataset.cooldownClear}); return;}
   const bsInt=e.target.closest('[data-bs-integrate]'); if (bsInt) {bsInt.disabled=true; const r=await command({action:'brainstorm_integrate',brainstorm_id:bsInt.dataset.bsIntegrate,phase:bsInt.dataset.bsPhase}); if (r) toast(r.message); bsInt.disabled=false; return;}
   const bsStop=e.target.closest('[data-bs-stop]'); if (bsStop) {if (confirm('Stop this brainstorm? Its agents stop; nothing is created.')) await command({action:'brainstorm_stop',brainstorm_id:bsStop.dataset.bsStop}); return;}
   if (e.target.closest('#bs-recommend')) {bsRecommend(); return;}

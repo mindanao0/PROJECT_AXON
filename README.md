@@ -23,6 +23,7 @@ axon ls                            # งานที่วิ่งอยู่�
 axon apply 12                      # เอาผลงานลง folder จริงของ project (uncommitted, ทับงานคุณไม่ได้)
 axon chat                          # คุยกับ claude ในโฟลเดอร์โปรเจกต์ (tmux, ไม่มี sandbox)
 axon brainstorm "เป้าหมาย"         # claude กับ codex วางแผนด้วยกัน (ถามคุณก่อน) แล้ว axon brainstorm ID --approve เพื่อสร้างงาน
+axon cooldown [claude|codex]       # โควตา agent กลับมาแล้ว: เลิกพักทันทีแทนรอเวลาที่ Axon เดา (ปุ่ม Retry now ในหน้า Agents)
 axon                               # เปิด GUI (ถ้ารันอยู่แล้วจะเปิดตัวเดิม)
 ```
 

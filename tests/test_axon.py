@@ -209,6 +209,14 @@ class Scheduling(AxonTest):
         self.assertEqual((t["status"], t["attempts"]), ("COMPLETED", 0))
         self.assertEqual(self.outcomes(tid), ["quota", "done"])
 
+    def test_clear_cooldown_ends_it_for_one_or_all_agents(self):
+        for a in ("claude", "codex"):
+            self.store.x("insert into cooldowns(agent, until, strikes) values (?, ?, 2)", a, time.time() + 3600)
+        self.assertEqual(runtime.clear_cooldown(self.store, "codex"), ["codex"])
+        self.assertEqual(runtime.clear_cooldown(self.store), ["claude"])
+        self.assertEqual(runtime.clear_cooldown(self.store), [])
+        self.assertEqual(self.store.one("select count(*) n from cooldowns")["n"], 0)
+
 
 class Safety(AxonTest):
     def test_stop_kills_orphaned_processes(self):

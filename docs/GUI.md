@@ -68,6 +68,7 @@ axon
 | Brainstorm | ถาม-ตอบและขั้นของการวางแผน (เฉพาะ real) |
 | Agent chat | terminal จริง (เฉพาะ real) |
 | Agents | provider, login, slot, cooldown, limit ที่เหลือ รวมถึง dispatch capacity และ usage 24 ชม. (เดิมแยกเป็นหน้า Resources) |
+| Agents: ลองใหม่ทันที | provider ที่ cooldown (โควตาหมด) มีปุ่ม "Retry now: the quota is back" ส่ง action `cooldown_clear` (`axon cooldown [agent]` ทำเหมือนกัน) ลบเวลาพักและนับ strike ใหม่ งานใน WAITING_QUOTA เริ่มใหม่ใน tick ถัดไป เพราะ Axon เดาเวลา reset เองจาก `quota_backoff` ไม่รู้เวลาจริง |
 | Activity log | ดู event ที่ Runtime บันทึกพร้อม task/attempt และ cursor |
 | Runtime settings | ดูขอบเขต local transport, recovery และความสามารถที่ยังไม่มี |
 

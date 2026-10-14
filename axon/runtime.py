@@ -653,6 +653,16 @@ def set_paused(store, paused):
     store.log(None, None, "control", paused=paused)
 
 
+def clear_cooldown(store, agent=None):
+    """End the quota cooldown now (Axon only guesses when a provider's quota comes back). Returns the agents cleared."""
+    now = time.time()
+    agents = [r["agent"] for r in store.q("select agent from cooldowns where until > ? and (? is null or agent = ?)", now, agent, agent)]
+    store.x("delete from cooldowns where (? is null or agent = ?)", agent, agent)
+    for a in agents:
+        store.log(None, None, "control", cooldown_cleared=a)
+    return agents
+
+
 def is_paused(store):
     row = store.one("select value from meta where key = 'paused'")
     return bool(row and row["value"] == "1")

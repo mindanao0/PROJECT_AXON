@@ -438,6 +438,8 @@ class Bridge:
         if action in ("pause", "resume"):
             runtime.set_paused(s, action == "pause")
             return {"ok": True}
+        if action == "cooldown_clear":
+            return {"ok": True, "cleared": runtime.clear_cooldown(s, p.get("agent") or None)}
         if action.startswith("chat_"):
             return self.chat(p)
         if action == "create_project":
