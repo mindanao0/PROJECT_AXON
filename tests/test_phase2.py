@@ -120,7 +120,7 @@ class Revision(AxonTest):
         self.assertIsNone(dup)
         r = self.task(rid)
         self.assertEqual((r["base"], r["round"], r["agent"]), (self.task(tid)["head"], 1, "fake"))
-        self.assertIn("src/x.py:1 wrong", r["context"])
+        self.assertIn("src/x.py:1 wrong", r["feedback"])
         self.run_all()
         self.assertEqual(self.task(rid)["status"], "COMPLETED")
         prompt = (self.tmp / "home" / "attempts" / f"{rid}-1" / "prompt.txt").read_text()
@@ -422,6 +422,24 @@ class PrepareAndReviewWithDependencies(AxonTest):
         self.assertTrue(runtime.approve(self.store, b))
         self.run_all()
         self.assertEqual(self.task(b)["status"], "COMPLETED")
+
+    def test_an_approval_covers_the_snapshot_approved_not_later_changes(self):
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text().replace('ok = "true"', 'ok = "false"'))  # every attempt is followed by another
+        tid = self.add(edit("pyproject.toml", "[project]\n", attempt=1) + edit("src/x.py", attempt=3)
+                       + edit("pyproject.toml", "[project]\nname = 'x'\n", attempt=4) + DONE, scope=["."])
+        self.run_all()
+        self.assertTrue(runtime.approve(self.store, tid))
+        self.run_all()  # 3: changes only source files, fails its check
+        self.assertTrue(runtime.retry(self.store, tid))
+        self.run_all()  # 4: not asked again; changes the dependency files, so 5 is
+        self.assertEqual(self.outcomes(tid), ["done", "needs-approval", "done", "done", "needs-approval"])
+        self.assertEqual(self.task(tid)["status"], "WAITING_APPROVAL")
+        proj, t = runtime.load_project("p"), self.task(tid)
+        ref = lambda n: self.git("rev-parse", f"refs/axon/attempts/{tid}-{n}").strip()
+        with self.assertRaisesRegex(integrate.IntegrationError, "dependency files changed"):
+            integrate.run_checks(self.rt, t, proj, ref(4), t["base"])
+        self.assertEqual([n for n, _, _ in integrate.run_checks(self.rt, t, proj, ref(3), t["base"])], ["ok"])
 
     def test_a_dependent_of_plain_source_changes_just_runs(self):
         a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])

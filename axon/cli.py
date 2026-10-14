@@ -246,7 +246,7 @@ def doctor(name):
             continue
         head = subprocess.run(["git", "-C", proj["path"], "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         try:
-            results = integrate.run_checks(rt, {"id": "doctor", "project": p, "checks": None, "approved": 1}, proj, head, head)
+            results = integrate.run_checks(rt, {"id": "doctor", "project": p, "checks": None}, proj, head, head)
         except Exception as e:
             report(f"project {p}: checks", False, str(e)[:300])
             continue

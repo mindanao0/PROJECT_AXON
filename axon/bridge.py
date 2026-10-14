@@ -43,7 +43,8 @@ def message(kind, d):
             "prepare": lambda: f"Prepare {d.get('name')}: exit {d.get('rc')}",
             "outcome": lambda: f"Attempt outcome: {d.get('outcome')}",
             "error": lambda: f"Runtime error: {d.get('error')}",
-            "control": lambda: "Dispatch paused; running attempts continue" if d.get("paused") else "Dispatch resumed",
+            "control": lambda: (f"{d['cooldown_cleared']} quota cooldown ended by the user" if "cooldown_cleared" in d
+                                else "Dispatch paused; running attempts continue" if d.get("paused") else "Dispatch resumed"),
             "instruction": lambda: "Instruction saved for the next attempt",
             "leak": lambda: "Agent credential found in a diff; result blocked",
             "stale-result-dropped": lambda: "Late result from a revoked attempt was dropped",
@@ -439,6 +440,8 @@ class Bridge:
             runtime.set_paused(s, action == "pause")
             return {"ok": True}
         if action == "cooldown_clear":
+            if not isinstance(p.get("agent") or "", str):
+                raise ControlError("agent must be text")
             return {"ok": True, "cleared": runtime.clear_cooldown(s, p.get("agent") or None)}
         if action.startswith("chat_"):
             return self.chat(p)
