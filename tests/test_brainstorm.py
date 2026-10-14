@@ -423,7 +423,7 @@ class Gate(AxonTest):
         self.assertEqual(status, "READY")
         self.assertEqual([(x["q"], x["a"]) for x in d["qa"]],
                          [("Where does the text come from: stdin or a file?", "a file"), ("Output format?", "plain text")])  # recorded once
-        ctx = {t["agent"] + str(t["id"]): t["context"] for t in self.store.q("select id, agent, context from tasks where kind = 'plan' and spec like '%clarify%'")}
+        ctx = {t["agent"] + str(t["id"]): t["feedback"] + t["context"] for t in self.store.q("select id, agent, feedback, context from tasks where kind = 'plan' and spec like '%clarify%'")}
         lead_ctx = next(c for c in ctx.values() if "Output format?" in c and "Input from stdin" in c)
         self.assertIn("A: a file", lead_ctx)
         other_ctx = next(c for c in ctx.values() if "Where does the text come" in c and "Input from stdin" not in c)

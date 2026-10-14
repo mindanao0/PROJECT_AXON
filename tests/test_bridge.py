@@ -302,6 +302,13 @@ class Controls(BridgeTest):
         self.b.command({"action": "resume"})
         self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
 
+    def test_retry_now_ends_a_cooldown_and_says_so(self):
+        self.store.x("insert into cooldowns(agent, until, strikes) values ('codex', ?, 1)", time.time() + 3600)
+        with self.assertRaises(ControlError):
+            self.b.command({"action": "cooldown_clear", "agent": ["codex"]})
+        self.assertEqual(self.b.command({"action": "cooldown_clear", "agent": "codex"})["cleared"], ["codex"])
+        self.assertIn("codex quota cooldown ended by the user", [e["message"] for e in self.b.snapshot()["events"]])
+
     def test_review_approval_is_bound_to_the_observed_attempt(self):
         tid = self.create(edit("docs/b.md") + DONE)
         snap = self.pump(lambda s: self.task(s, tid)["state"] == "REVIEW")

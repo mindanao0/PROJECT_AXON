@@ -246,7 +246,7 @@ def doctor(name):
             continue
         head = subprocess.run(["git", "-C", proj["path"], "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         try:
-            results = integrate.run_checks(rt, {"id": "doctor", "project": p, "checks": None, "approved": 1}, proj, head, head)
+            results = integrate.run_checks(rt, {"id": "doctor", "project": p, "checks": None}, proj, head, head)
         except Exception as e:
             report(f"project {p}: checks", False, str(e)[:300])
             continue
@@ -405,6 +405,7 @@ def main(argv=None):
     bs.add_argument("--answer", action="store_true", help="answer the merged questions both agents are waiting on")
     bs.add_argument("--stop", action="store_true", help="stop a running brainstorm")
     sub.add_parser("ls", help="list tasks (running ones show how long and when they last wrote output)")
+    sub.add_parser("cooldown", help="end the quota cooldown now and try again: axon cooldown [claude|codex] (all if omitted)").add_argument("agent", nargs="?")
     sub.add_parser("run", help="run tasks in this terminal, without the GUI (one runner per machine)")
     for name, help_ in [("show", "task details and events"), ("stop", "stop or cancel a task"),
                         ("approve", "approve a task waiting for approval or in review"),
@@ -597,6 +598,8 @@ def main(argv=None):
         print(f"fast-forwarded to {commit[:10]}")
     elif args.cmd == "stop":
         print(runtime.stop_task(store, args.id))
+    elif args.cmd == "cooldown":
+        print(", ".join(runtime.clear_cooldown(store, args.agent)) or "no agent is cooling down")
     elif args.cmd == "apply":
         try:
             files = runtime.apply_result(store, args.id)

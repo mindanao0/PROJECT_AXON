@@ -45,7 +45,9 @@ def merge(path, ours, theirs, message):
 def run_checks(rt, t, proj, commit, tip, names=None):
     """Checks (default: the task's own, else all) on a clone of exactly `commit`; [(name, rc, tail)]."""
     names = names or (json.loads(t["checks"]) if t["checks"] else list(proj["checks"]))
-    if proj["prepare"] and not t["approved"] and sandbox.inputs_changed(proj["path"], tip, commit, proj["prepare_inputs"]):
+    changed = lambda a: sandbox.inputs_changed(proj["path"], a, commit, proj["prepare_inputs"])
+    # OD-023: changed dependency files pass only as they were in the snapshot the user approved
+    if proj["prepare"] and changed(tip) and (not t["approved_commit"] or changed(t["approved_commit"])):
         raise IntegrationError("dependency files changed; approve this task's prepare step first")
     lim, aid = rt.cfg["limits"], f"i{t['id']}"
     repo = runtime.data_dir() / "integrations" / f"{t['project']}-{commit[:10]}" / "repo"
@@ -68,7 +70,7 @@ def baseline(rt, project):
     """Names of the project's checks that already fail on its HEAD."""
     proj = runtime.load_project(project)
     head = git(proj["path"], "rev-parse", "--verify", "HEAD")[1]
-    return [n for n, rc, _ in run_checks(rt, {"id": "baseline", "project": project, "checks": None, "approved": 1}, proj, head, head) if rc]
+    return [n for n, rc, _ in run_checks(rt, {"id": "baseline", "project": project, "checks": None}, proj, head, head) if rc]
 
 
 def integrate(rt, *tids):

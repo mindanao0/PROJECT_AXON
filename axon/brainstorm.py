@@ -519,9 +519,7 @@ def prompt(rt, t):
         lines.append(d["fix"])
     if phase == "check":
         lines += ["--- merged plan to judge ---", json.dumps(d["merged"])]
-    if t["context"].strip():
-        lines += ["Notes from earlier attempts and the user:", t["context"].strip()]
-    return "\n".join(lines + [FINISH, "--- task ---", t["spec"]])
+    return "\n".join(lines + runtime.notes(t) + [FINISH, "--- task ---", t["spec"]])
 
 
 def share(store, tid, text):

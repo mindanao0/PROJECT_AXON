@@ -11,7 +11,7 @@ create table if not exists tasks(
   scope text not null, key text not null, base text not null, head text,
   status text not null, attempts integer not null default 0,
   note text not null default '', context text not null default '',
-  approved integer not null default 0, cancel integer not null default 0,
+  cancel integer not null default 0,
   created real not null, updated real not null);
 -- One live task per key: work that is queued, running or done is never queued twice (D-008).
 create unique index if not exists task_key on tasks(key) where status not in ('FAILED', 'CANCELLED');
@@ -40,13 +40,16 @@ class Store:
             c.executescript(SCHEMA)
             for table, cols in (("tasks", (("kind", "text not null default ''"), ("target", "integer"), ("after", "integer"),
                                            ("parent", "integer"), ("round", "integer not null default 0"), ("checks", "text"),
-                                           ("model", "text"), ("effort", "text"), ("needs", "text"))),
+                                           ("model", "text"), ("effort", "text"), ("needs", "text"),
+                                           ("approved_commit", "text"), ("feedback", "text not null default ''"))),
                                 ("attempts", (("prompt_bytes", "integer"), ("usage", "text"),
                                               ("model", "text"), ("effort", "text")))):
                 have = {r["name"] for r in c.execute(f"pragma table_info({table})")}
                 for col, ddl in cols:
                     if col not in have:  # databases created before the column existed
                         c.execute(f"alter table {table} add column {col} {ddl}")
+                        if col == "feedback":  # OD-013: context was the user's words mixed with agent and check output
+                            c.execute("update tasks set feedback = context, context = ''")
         finally:
             c.close()
 
@@ -82,12 +85,19 @@ class Store:
 
     def move(self, task, new, frm, **fields):
         """Compare-and-set a task's status. False means someone else changed it first.
-        `context_add` appends to the context instead of replacing it."""
-        sets = "".join(", context = context || ?" if k == "context_add" else f", {k} = ?"
+        `context_add` / `feedback_add` append to that column instead of replacing it."""
+        sets = "".join(f", {k[:-4]} = {k[:-4]} || ?" if k.endswith("_add") else f", {k} = ?"
                        for k in fields)
         marks = ",".join("?" * len(frm))
-        n, _ = self.x(f"update tasks set status = ?, updated = ?{sets} where id = ? and status in ({marks})",
-                      new, time.time(), *fields.values(), task, *frm)
-        if n:
-            self.log(task, None, "status", status=new, note=fields.get("note", ""))
+        c = self._conn()
+        try:
+            with c:  # the status and its event commit together (OD-023)
+                c.execute("begin immediate")
+                n = c.execute(f"update tasks set status = ?, updated = ?{sets} where id = ? and status in ({marks})",
+                              (new, time.time(), *fields.values(), task, *frm)).rowcount
+                if n:
+                    c.execute("insert into events(task, attempt, kind, data, at) values (?,?,?,?,?)",
+                              (task, None, "status", json.dumps({"status": new, "note": fields.get("note", "")}), time.time()))
+        finally:
+            c.close()
         return n == 1

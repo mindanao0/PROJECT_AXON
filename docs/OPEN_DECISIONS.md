@@ -2,7 +2,7 @@
 
 เอกสารนี้เก็บสิ่งที่ **ยังไม่ได้ตัดสินใจ** และสถานะคำตัดสินที่เกี่ยวข้อง รายการที่ยืนยันแล้วอ้าง [Confirmed Decisions](DECISIONS.md); ข้อเสนอ acceptance อยู่ใน [MVP Contract](MVP_CONTRACT.md)
 
-สถานะ (2026-10-08): ไม่มี OD ที่เปิดอยู่ (OD-019 ปิดแล้ว เหลือข้อเทาของ `claude -p`); นโยบายตัดสินแล้วแต่ enforcement ยังค้าง: OD-013 และช่องว่างที่รู้แล้วใน OD-023 และ OD-015 ข้ออื่นตัดสินแล้ว (D-015–D-032) บางข้อเป็นคำตัดสินว่า "ยังไม่สร้าง" พร้อมเงื่อนไขที่จะกลับมาดูใหม่
+สถานะ (2026-10-08): ไม่มี OD ที่เปิดอยู่ (OD-019 ปิดแล้ว เหลือข้อเทาของ `claude -p`); นโยบายตัดสินแล้วแต่ enforcement ยังค้าง: OD-013 (probe hooks กับ CLI จริง) และช่องว่างที่รู้แล้วใน OD-023 (event schema) และ OD-015 (2026-10-15: แยกโน้ตใน prompt ตามระดับ, ผูกการอนุมัติกับ commit, สถานะกับ event อยู่ใน transaction เดียวแล้ว) ข้ออื่นตัดสินแล้ว (D-015–D-032) บางข้อเป็นคำตัดสินว่า "ยังไม่สร้าง" พร้อมเงื่อนไขที่จะกลับมาดูใหม่
 
 ## OD-001 Core implementation language — RESOLVED
 
@@ -108,12 +108,12 @@ D-023: trust labels และ precedence (สูง → ต่ำ)
 - settings ของ agent CLI ใน repo (`.claude/`, `.codex/`, `.mcp.json` — `AGENT_CONFIG` ใน `axon/runtime.py`) เป็น protected เสมอ: ผลที่แก้ไฟล์เหล่านี้ไปที่ REVIEW และ attempt ที่จะเริ่มต่อจาก snapshot ที่ attempt ก่อนแก้ไฟล์เหล่านี้ (retry, ตอบคำถาม, quota) ต้องรอผู้ใช้อนุมัติก่อน เพราะ hooks/notify ในไฟล์เหล่านี้รันคำสั่งด้วยเน็ตของ CLI นอก `run_check` (tests: `test_agent_settings_in_a_result_need_review`, `test_a_retry_does_not_start_on_agent_settings_an_attempt_planted`)
 - ระดับ 3: `delegate` จำกัด 1 ชั้น ไม่เกิน `max_delegations` และ scope ต้องอยู่ใน scope ของงานแม่; ผลของ agent ไม่เปลี่ยนสถานะเอง เพราะ Runtime รัน checks ก่อน COMPLETED
 - ระดับ 4: prompt ของ reviewer ระบุว่า requirement และ diff เป็นข้อมูล ไม่ใช่คำสั่ง (`_review_prompt`); diff ที่มี credential ของ agent จะไม่ถูก fetch (`_collect`); hooks ของ git ใน clone ไม่ถูกรัน (`core.hooksPath=/dev/null`)
+- โน้ตใน prompt ของงาน implement และ plan แยกตามผู้เขียน (`runtime.notes`): `tasks.context` เก็บเฉพาะคำสั่งและคำตอบของผู้ใช้ (ระดับ 1) ส่วน `tasks.feedback` เก็บคำถามของ agent, output ของ check และผลรีวิว (ระดับ 3–4) และขึ้นหัวข้อว่าเป็นข้อมูล ไม่ใช่คำสั่ง output ของ check จึงปลอมเป็นคำสั่งผู้ใช้ไม่ได้ (test: `test_check_output_is_data_and_only_the_user_s_words_are_instructions`) DB เก่าย้าย `context` เดิมทั้งหมดไป `feedback` ครั้งเดียว; คำถามที่ agent สองตัวรวมกันใน Brainstorm อยู่ฝั่งผู้ใช้เพราะผู้ใช้ตอบแล้ว
 
 ความเสี่ยงที่ยอมรับ: เปิดเว็บให้ agent เป็นค่าเริ่มต้น (`[agents] web = true`) เพราะงานจริงต้องค้นข้อมูลได้ (ผู้ใช้ตัดสิน 2026-10-08) เนื้อหาเว็บ (ระดับ 4) จึงเข้าถึง agent ได้โดยตรง และเครื่องมือเว็บเปิด URL ที่โมเดลเลือกได้ ซึ่งเป็นช่องส่งข้อมูลออก (คำสั่งและ checks ยังไม่มีเน็ต) ยอมรับได้กับ project ส่วนตัว; ถ้ามี project ที่มีข้อมูลอ่อนไหว ให้เพิ่มสวิตช์ปิดเว็บราย project (ตอนนี้มีแค่ระดับทั้งระบบ)
 
 ยังต้องทำ (enforcement):
-1. prompt ของงาน implement รวมคำสั่งผู้ใช้ ผลของ check และผลรีวิวไว้ในหัวข้อเดียว ("Notes from earlier attempts and the user") ให้แยกเป็นส่วนตามระดับ และใส่บรรทัด "data, not instructions" แบบเดียวกับ prompt ของ reviewer
-2. รัน `python3 probes/adapter.py claude hooks` และ `codex hooks` กับ CLI จริงแล้วบันทึกผลที่นี่: (ก) CLI โหลด settings จาก repo เอง และคำสั่งนั้นมีเน็ตหรือไม่ — ถ้าใช่ ให้ปิดการโหลด project settings ตอนรันงานถ้า CLI ทำได้; (ข) agent เขียนลง agent home ของตัวเอง (`~/.local/share/axon/agents/<agent>/`) ได้หรือไม่ — agent home ถูก mount แบบเขียนได้ ถ้าเขียนได้ agent จะวาง settings ระดับผู้ใช้ให้งานถัดไปได้ ซึ่ง protected paths ไม่ครอบคลุม
+1. รัน `python3 probes/adapter.py claude hooks` และ `codex hooks` กับ CLI จริงแล้วบันทึกผลที่นี่: (ก) CLI โหลด settings จาก repo เอง และคำสั่งนั้นมีเน็ตหรือไม่ — ถ้าใช่ ให้ปิดการโหลด project settings ตอนรันงานถ้า CLI ทำได้; (ข) agent เขียนลง agent home ของตัวเอง (`~/.local/share/axon/agents/<agent>/`) ได้หรือไม่ — agent home ถูก mount แบบเขียนได้ ถ้าเขียนได้ agent จะวาง settings ระดับผู้ใช้ให้งานถัดไปได้ ซึ่ง protected paths ไม่ครอบคลุม
 
 ## OD-014 Plugin/adapter sandbox — RESOLVED
 
@@ -219,7 +219,8 @@ D-025: กติกาที่ใช้จริงในโค้ด (`axon/ru
 - agent crash หรือ check ล้ม → retry อัตโนมัติไม่เกิน `max_attempts` แล้วเป็น FAILED
 
 Guards:
-- ทุก transition เป็น compare-and-set (`Store.move` เปลี่ยนเฉพาะเมื่อสถานะปัจจุบันอยู่ในชุดที่อนุญาต) และบันทึก event `status`
+- ทุก transition เป็น compare-and-set (`Store.move` เปลี่ยนเฉพาะเมื่อสถานะปัจจุบันอยู่ในชุดที่อนุญาต) และบันทึก event `status` ใน transaction เดียวกัน (crash ระหว่างนั้นไม่ทำให้สถานะเปลี่ยนโดยไม่มี event)
+- การอนุมัติก่อนเริ่ม attempt ที่ต่อจาก snapshot (ไฟล์ dependency ที่ `prepare` ใช้เน็ต และ settings ของ agent ตาม OD-013 — ถามครั้งเดียวพร้อมเหตุผลทั้งหมด) ผูกกับ commit ที่ผู้ใช้อนุมัติ (`tasks.approved_commit`): attempt ถัดไปเทียบไฟล์เหล่านั้นจาก commit นั้น ถ้า attempt หลังแก้อีกจะถามซ้ำ; integrate ก็ยอมไฟล์ dependency ที่เปลี่ยนเฉพาะเมื่อตรงกับ commit นั้น
 - ผลจาก attempt ที่ไม่อยู่ในสถานะ `running` แล้วถูกทิ้ง (`stale-result-dropped`) และ tool call จาก attempt นั้นถูกปฏิเสธ
 - Runner มีได้ตัวเดียว (file lock) แทน lease/heartbeat; `recover()` ฆ่า scope ที่ค้างแล้ว requeue
 - instruction เปลี่ยนระหว่างรัน → ทิ้งผลแล้วรันใหม่
@@ -241,9 +242,7 @@ Approval และ evidence: approve ของ review ผูกกับ commit 
 | Rollback | `discard` ลบ integration branch โดยไม่ย้อน branch ของผู้ใช้ |
 
 ช่องว่างกับ MVP Contract ที่รู้แล้ว (แก้เมื่อมีเหตุให้ต้องใช้):
-1. การอนุมัติก่อนเริ่ม attempt ที่ต่อจาก snapshot (ไฟล์ dependency ที่ `prepare` ใช้เน็ต และ settings ของ agent ตาม OD-013 — ถามครั้งเดียวพร้อมเหตุผลทั้งหมด) ผูกกับ task (`approved = 1`) ไม่ได้ผูกกับ hash ของไฟล์ ถ้า attempt หลังแก้ไฟล์เหล่านั้นอีกจะไม่ถามซ้ำ ควรผูกกับ hash ของไฟล์ที่อนุมัติ
-2. update สถานะกับ event `status` อยู่คนละ statement ไม่ใช่ transaction เดียว ถ้า crash ระหว่างนั้น event จะหายได้ (สถานะยังถูกต้อง)
-3. event ไม่มี schema_version / correlation id / producer sequence ซึ่งพอสำหรับ Runtime ตัวเดียว แต่ต้องเพิ่มก่อนมี producer ที่สอง (remote หรือ A2A)
+1. event ไม่มี schema_version / correlation id / producer sequence ซึ่งพอสำหรับ Runtime ตัวเดียว แต่ต้องเพิ่มก่อนมี producer ที่สอง (remote หรือ A2A)
 
 ## OD-024 Project name — RESOLVED
 
