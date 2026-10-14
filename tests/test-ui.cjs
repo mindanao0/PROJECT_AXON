@@ -92,6 +92,9 @@ assert(turn({expanding:true}, []).includes('breaking this phase into tasks'));
 const retry=turn({ready:false,started:true,failed:2}, [mk('a')]);
 assert(retry.includes('data-bs-create="2" data-bs-phase="p1"')&&retry.includes('make the 2 failed or stopped tasks again'),'a started phase with failed tasks offers a retry');
 assert(!turn({ready:false,started:true,failed:0}, [mk('a')]).includes('data-bs-create'),'a started phase with nothing failed offers nothing');
+const finished=turn({ready:false,started:true,done:true,failed:0}, [mk('a')]);
+assert(finished.includes('data-bs-integrate="2" data-bs-phase="p1"')&&!finished.includes('data-bs-create'),'a finished phase offers to be integrated');
+assert(!turn({ready:false,started:true,done:false,failed:0}, [mk('a')]).includes('data-bs-integrate'),'an unfinished phase does not');
 assert(withTasks.includes('>READY<')&&!withTasks.includes('>RUNNING<'),'written tasks that nobody started do not make the plan RUNNING');
 
 async function controls() {

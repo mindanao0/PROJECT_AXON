@@ -80,5 +80,12 @@ def changed_files(project, a, b):
     return [f for f in r.stdout.split("\0") if f]
 
 
+def removed_files(project, a, b):
+    """Files that exist in a and not in b (a moved file counts under its old name)."""
+    r = subprocess.run(["git", "-C", project, "diff", "--name-only", "--diff-filter=D", "--no-renames", "-z", "--no-ext-diff", a, b],
+                       capture_output=True, text=True, check=True)
+    return [f for f in r.stdout.split("\0") if f]
+
+
 def inputs_changed(project, a, b, paths):
     return subprocess.run(["git", "-C", project, "diff", "--quiet", a, b, "--", *paths]).returncode != 0

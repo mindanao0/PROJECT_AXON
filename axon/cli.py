@@ -335,6 +335,14 @@ def brainstorm_cmd(store, a):
             elif a.expand:
                 brainstorm.expand(store, bid, None if a.expand == "next" else a.expand)
                 print("the lead is breaking the phase into tasks; look with: axon brainstorm", bid)
+            elif a.integrate:
+                rt = runtime.Runtime(store)
+                try:
+                    for g in brainstorm.integrate_tasks(rt, brainstorm.phase_task_ids(store, bid, None if a.integrate == "done" else a.integrate)):
+                        print(f"integrated task{'s' if len(g) > 1 else ''} {', '.join(map(str, g))}")
+                except integrate.IntegrationError as e:
+                    sys.exit(f"not integrated: {e}")
+                print("promote with: axon promote", store.one("select project from brainstorms where id = ?", bid)["project"])
             elif a.approve:
                 if not a.force and (why := brainstorm.baseline_error(runtime.Runtime(store), bid)):
                     sys.exit(why + " (--force)")
@@ -392,6 +400,7 @@ def main(argv=None):
     bs.add_argument("--approve", action="store_true", help="turn a phase of a finished plan into queued tasks (--phase ID; default: the first not started)")
     bs.add_argument("--phase", help="the phase --approve starts (a started one: makes its failed or stopped tasks again)")
     bs.add_argument("--force", action="store_true", help="--approve even though the project's checks already fail")
+    bs.add_argument("--integrate", nargs="?", const="done", metavar="PHASE", help="put the finished phase (default: every finished phase) on the integration branch, in order")
     bs.add_argument("--expand", nargs="?", const="next", metavar="PHASE", help="have the lead break a phase into tasks (default: the first not started)")
     bs.add_argument("--answer", action="store_true", help="answer the merged questions both agents are waiting on")
     bs.add_argument("--stop", action="store_true", help="stop a running brainstorm")

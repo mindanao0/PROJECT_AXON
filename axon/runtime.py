@@ -47,6 +47,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 # Tasks that read one commit and write nothing: they claim no scope and block nobody.
 READONLY = ("review", "ask", "plan")
 PEER = {"claude": "codex", "codex": "claude"}
+CAN_MOVE = {"claude"}  # D-040: only these delete or move files for a task; the others ask first
 STOPPABLE = ("QUEUED", "WAITING_INPUT", "WAITING_APPROVAL", "WAITING_QUOTA", "REVIEW")
 # What an agent CLI loads as its own settings from the repository: hooks and helpers there run commands with the
 # CLI's network, outside run_check. Always protected, and never loaded unseen by a later attempt (OD-013).
@@ -1101,6 +1102,8 @@ class Runtime:
         files = sandbox.changed_files(proj["path"], t["base"], head)
         flags = [f"outside scope: {f}" for f in files if not any(under(f, sc) for sc in scope)]
         flags += [f"protected: {f}" for f in files if any(under(f, p) for p in proj["protected"])]
+        if t["agent"] not in CAN_MOVE:  # D-040: it had a shell and removed files itself; the user decides first
+            flags += [f"removes: {f}" for f in sandbox.removed_files(proj["path"], t["base"], head)]
         if flags:
             self.store.move(t["id"], "REVIEW", ("RUNNING",), head=head, note="; ".join(flags)[:500])
         elif self.store.move(t["id"], "COMPLETED", ("RUNNING",), head=head, note=summary) and proj["auto_apply"]:
@@ -1188,6 +1191,8 @@ class Runtime:
             return self._delegate(t, args)
         if tool == "ask_peer":
             return self._ask_peer(t, aid, args)
+        if tool in ("delete_file", "move_file"):
+            return self._file_op(t, repo, tool, args)
         if tool == "run_check":
             name = args.get("name")
             if name not in proj["checks"]:
@@ -1195,6 +1200,41 @@ class Runtime:
             rc, tail = self._check(aid, repo, proj, ro, name)
             return True, f"exit {rc}\n{tail}"
         return False, f"unknown tool {tool}"
+
+    def _file_op(self, t, repo, tool, args):
+        """delete_file / move_file in the attempt's own clone (D-040). Claude has no shell, so it cannot remove or rename
+        a file; Codex has one, so a result of its that removes files is held for the user instead (_verify)."""
+        if t["agent"] not in CAN_MOVE:
+            return False, ("only Claude may delete or move files. Ask Claude how to avoid it with ask_peer, or ask the user "
+                           "with ask_user; a result of yours that removes a file waits for the user's approval")
+        if t["kind"] in READONLY:
+            return False, "this task is read-only"
+        root, scope = os.path.realpath(repo), json.loads(t["scope"])
+
+        def own(rel, must_exist):
+            rel = os.path.normpath(str(rel or "").strip())
+            full = os.path.realpath(os.path.join(root, os.path.dirname(rel))) + "/" + os.path.basename(rel)
+            if rel in ("", ".") or os.path.isabs(rel) or rel.split("/")[0] in ("..", ".git") or not full.startswith(root + "/"):
+                raise ValueError(f"not a path inside the project: {rel}")
+            if not any(under(rel, sc) for sc in scope):
+                raise ValueError(f"{rel} is outside your scope ({', '.join(scope)})")
+            if must_exist and (os.path.isdir(full) and not os.path.islink(full) or not os.path.lexists(full)):
+                raise ValueError(f"{rel} is not a file")
+            return rel, full
+        try:
+            if tool == "delete_file":
+                rel, full = own(args.get("path"), True)
+                os.unlink(full)
+                return True, f"deleted {rel}"
+            src, a = own(args.get("from"), True)
+            dst, b = own(args.get("to"), False)
+            if os.path.lexists(b):
+                raise ValueError(f"{dst} already exists")
+            os.makedirs(os.path.dirname(b), exist_ok=True)
+            os.rename(a, b)
+            return True, f"moved {src} to {dst}"
+        except (ValueError, OSError) as e:
+            return False, str(e)
 
     def _ask_prompt(self, t):
         asker = self.store.one("select agent, spec from tasks where id = ?", t["target"])

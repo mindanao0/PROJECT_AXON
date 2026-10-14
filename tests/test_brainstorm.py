@@ -158,6 +158,23 @@ class Brainstorm(AxonTest):
         self.assertEqual(self.store.one("select after from tasks where id = ?", again["b"])["after"], again["a"])
         self.assertEqual(self.store.one("select status from tasks where id = ?", again["b"])["status"], "QUEUED")
 
+    def test_the_planner_is_told_which_paths_are_protected(self):
+        bid = self.start(HAPPY)
+        self.assertRegex(self.prompts(bid, "merge")[-1], r"protected paths[^\n]*---\n[^\n]*tests")
+        self.assertIn("Only claude deletes, moves or renames files", self.prompts(bid, "merge")[-1])
+
+    def test_a_finished_phase_lists_its_tasks_to_integrate_in_order(self):
+        bid = self.start(HAPPY)
+        with self.assertRaisesRegex(ValueError, "no finished phase"):
+            brainstorm.phase_task_ids(self.store, bid)
+        ids = brainstorm.create_tasks(self.store, bid)
+        with self.assertRaisesRegex(ValueError, "not finished"):
+            brainstorm.phase_task_ids(self.store, bid, "p1")
+        for tid in ids.values():
+            self.store.move(tid, "COMPLETED", ("QUEUED",), note="done")
+        self.assertEqual(brainstorm.phase_task_ids(self.store, bid, "p1"), sorted(ids.values()))
+        self.assertEqual(brainstorm.phase_task_ids(self.store, bid), sorted(ids.values()))
+
     def test_the_checker_is_told_an_empty_phase_is_deliberate(self):
         self.assertIn("do not object that it has no tasks", brainstorm.STEPS["check"])
 
@@ -288,6 +305,8 @@ class Screens(BridgeTest):
             out = self.b.command({"action": "brainstorm_create_tasks", "brainstorm_id": r["brainstorm_id"], "force": True})
         self.assertEqual(set(out["task_ids"]), {"a", "b"})
         self.assertEqual(len([t for t in self.b.snapshot()["tasks"] if t["kind"] == "task"]), 2)
+        with self.assertRaisesRegex(ControlError, "not finished"):  # its tasks have not run
+            self.b.command({"action": "brainstorm_integrate", "brainstorm_id": r["brainstorm_id"], "phase": "p1"})
         with self.assertRaises(ControlError):
             self.b.command({"action": "brainstorm_start", "project_id": "nope", "goal": "x"})
 
