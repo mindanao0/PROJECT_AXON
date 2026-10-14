@@ -69,7 +69,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await page.locator('#task-detail').getByText('Verified by').waitFor();
     await page.locator('#task-detail .badge.completed').waitFor({timeout: 60000});
     await page.locator('#detail-dialog').getByRole('button', {name: 'Close task details', exact: true}).click();
-    await page.locator('.sidebar [data-view="resources"]').click();
+    await page.locator('.sidebar [data-view="agents"]').click();
     await page.getByText('Usage, last 24 hours').waitFor();
     assert(await page.locator('.usage-table').innerText().then(x => x.includes('fake') && x.includes('implement')), 'usage table lists the fake attempts');
     // Model and effort: set in Settings, saved to config.toml, offered again after a reload.
@@ -94,7 +94,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await page.locator('#task-agent').selectOption('fake');
     assert.equal(await page.locator('#task-model-row').isVisible(), false);
     await page.locator('#task-dialog [data-close="task-dialog"]').first().click();
-    for (const view of ['overview', 'tasks', 'agents', 'activity', 'artifacts', 'resources', 'settings']) {  // every page still renders
+    for (const view of ['tasks', 'plans', 'brainstorm', 'agents', 'activity', 'settings']) {  // every page still renders
       await page.locator(`.sidebar [data-view="${view}"]`).click();
       assert(await page.locator('#content').innerText().then(x => x.trim().length > 20), `view ${view} rendered nothing`);
     }

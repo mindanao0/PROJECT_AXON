@@ -23,6 +23,8 @@ TOKEN = "FAKE-SECRET-0123456789abcdefghij"
 def toml(v):
     if isinstance(v, dict):
         return "{" + ", ".join(f"{k} = {toml(x)}" for k, x in v.items()) + "}"
+    if isinstance(v, list):
+        return "[" + ", ".join(toml(x) for x in v) + "]"
     return json.dumps(v)
 
 

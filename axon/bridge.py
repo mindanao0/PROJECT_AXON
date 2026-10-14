@@ -13,7 +13,7 @@ import threading
 import tomllib
 from pathlib import Path
 
-from . import agent_options, integrate, runtime, sandbox, usage
+from . import agent_options, brainstorm, integrate, runtime, sandbox, usage
 from .core import ControlError, clean_text, normalize_scope
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
@@ -267,10 +267,10 @@ class Bridge:
                     reasons.append({"code": "scope", "task_id": str(o["id"]), "message": f"Scope held by {o['title'] or 'task ' + str(o['id'])}"})
             if c["busy"].get(t["agent"], 0) >= slots.get(t["agent"], 1):
                 reasons.append({"code": "slot", "message": f"{t['agent']} slots full ({c['busy'][t['agent']]}/{slots.get(t['agent'], 1)})"})
-            dep = t["after"] is not None and c["by_id"].get(t["after"])
-            if dep and dep["status"] != "COMPLETED":
-                reasons.append({"code": "dependency", "task_id": str(dep["id"]),
-                                "message": f"Waiting for task {dep['id']} to complete (it is {dep['status']})"})
+            for dep in filter(None, (c["by_id"].get(i) for i in runtime.deps_of(t))):
+                if dep["status"] != "COMPLETED":
+                    reasons.append({"code": "dependency", "task_id": str(dep["id"]),
+                                    "message": f"Waiting for task {dep['id']} to complete (it is {dep['status']})"})
             reasons = reasons or [{"code": "ready", "message": "Ready for the next dispatch tick"}]
         elif state == "WAITING_QUOTA":
             reasons.append({"code": "cooldown", "until": c["cool"].get(t["agent"], t["updated"]), "message": f"{t['agent']} quota cooldown"})
@@ -281,20 +281,22 @@ class Bridge:
             except OSError:
                 out = None
             live = {"running_since": c["attempts"][tid][-1]["started"], "last_output": out}
-        pending = None
-        if state in ("WAITING_INPUT", "WAITING_APPROVAL"):  # REVIEW has no separate question; the UI shows the diff
+        pending, held = None, brainstorm.held(self.store, tid) if state == "WAITING_INPUT" and t["kind"] == "plan" else None
+        if state in ("WAITING_INPUT", "WAITING_APPROVAL") and not held:  # REVIEW has no separate question; the UI shows the diff
             pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
                        "expires": t["updated"] + 86400, "payload_hash": "",
-                       "options": runtime.ask_options(self.store, tid) if state == "WAITING_INPUT" else []}
+                       "options": runtime.ask_options(self.store, tid) if state == "WAITING_INPUT" else [],
+                       "questions": runtime.ask_questions(self.store, tid) if state == "WAITING_INPUT" else []}
         return {
             "model": t["model"], "effort": t["effort"], "checks": json.loads(t["checks"]) if t["checks"] else None,
-            "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
+            "held_by": str(held) if held else None, "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "needs": [str(i) for i in json.loads(t["needs"] or "[]")], "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
             "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
             "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
             "artifacts": self.artifacts(t, aid, c["evidence"].get(tid, []), full, c["projects"]),
             "due": c["cool"].get(t["agent"], t["updated"]) if state == "WAITING_QUOTA" else None,
-            "activity": t["note"] or state.replace("_", " ").title(),
+            "activity": f"Waiting for your answer in Brainstorm #{held}: both agents' questions are merged there, answer them once" if held
+            else t["note"] or state.replace("_", " ").title(),
             "result_ref": f"refs/axon/attempts/{aid}" if state == "COMPLETED" and t["head"] and aid else None,
             "source": json.loads(t["source"]) if t["source"] else None,
             "attempts": [{"id": a["id"], "started_at": a["started"], "ended_at": a["ended"], "backend": t["agent"],
@@ -332,7 +334,7 @@ class Bridge:
                 "tasks": [self.task_view(t, c, False) for t in c["rows"]],
                 "events": [self.event(r, proj_of, False) for r in evs],
                 "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
-                "integration": self.integration(), "agent_options": self.agent_options(), "usage": self.usage(),
+                "integration": self.integration(), "brainstorms": brainstorm.recent(s), "agent_options": self.agent_options(), "usage": self.usage(),
                 "providers": self.providers(c["busy"], c["cool"]), "settings": self.settings(),
                 "resources": {"slots": [{"backend": n, "used": c["busy"].get(n, 0), "limit": slots.get(n, 1)} for n in names],
                               "memory_available": True, "mode": "real"},
@@ -440,6 +442,34 @@ class Bridge:
             return self.chat(p)
         if action == "create_project":
             return self.create_project(p)
+        if action == "browse_dir":
+            return self.browse_dir(p.get("path"))
+        if action == "brainstorm_start":
+            if p.get("project_id") not in {x["id"] for x in self.projects()}:
+                raise ControlError("Unknown project")
+            opts = {r: {k: str(p.get(f"{r}_{k}") or "") for k in ("model", "effort", "light_model", "light_effort")} for r in ("lead", "other")}
+            try:
+                bid = brainstorm.start(s, p["project_id"], p.get("goal"), p.get("lead") or None, p.get("other") or None, opts)
+            except (ValueError, subprocess.CalledProcessError) as e:
+                raise ControlError(f"Cannot start: {e}"[:300])
+            return {"brainstorm_id": str(bid)}
+        if action in ("brainstorm_create_tasks", "brainstorm_expand", "brainstorm_stop", "brainstorm_answer"):
+            try:
+                bid = int(p.get("brainstorm_id"))
+                if action == "brainstorm_answer":
+                    brainstorm.answer_gate(s, bid, p.get("answers"))
+                    return {"ok": True}
+                if action == "brainstorm_stop":
+                    brainstorm.cancel(s, bid)
+                    return {"ok": True}
+                if action == "brainstorm_expand":
+                    brainstorm.expand(s, bid, p.get("phase") or None)
+                    return {"ok": True}
+                if not p.get("force") and (why := brainstorm.baseline_error(self.rt, bid)):
+                    return {"warning": why}  # the screen asks the user whether to start anyway
+                return {"task_ids": {k: str(v) for k, v in brainstorm.create_tasks(s, bid, p.get("phase") or None).items()}}
+            except (TypeError, ValueError, subprocess.CalledProcessError) as e:
+                raise ControlError(str(e)[:300])
         if action == "update_settings":
             return self.update_settings(p.get("values"))
         if action == "create_task":
@@ -497,7 +527,10 @@ class Bridge:
             if st != "REVIEW" and p.get("pending_id") != f"{tid}:{aid}:{st}":
                 raise ControlError("Request changed or has already been resolved")
             if action == "answer":
-                ok = st == "WAITING_INPUT" and runtime.answer(s, tid, clean_text(p.get("text"), "Answer", 2000))
+                try:
+                    ok = st == "WAITING_INPUT" and runtime.answer(s, tid, clean_text(p.get("text"), "Answer", 4000))
+                except ValueError as e:
+                    raise ControlError(str(e)[:300])
             elif st in ("WAITING_APPROVAL", "REVIEW"):
                 ok = (runtime.approve if action == "approve" else runtime.reject)(s, tid)
         elif action == "revise":
@@ -630,6 +663,20 @@ class Bridge:
         except ValueError as e:
             raise ControlError(str(e))
         return {"id": f.stem}
+
+    def browse_dir(self, raw):
+        """Subfolders of `raw` (home when empty or not a folder), for the project folder picker."""
+        d = Path(os.path.expanduser(str(raw or "~"))).resolve()
+        if not d.is_dir():
+            d = Path.home()
+        dirs = []
+        try:
+            for c in sorted(d.iterdir(), key=lambda c: c.name.lower()):
+                if not c.name.startswith(".") and c.is_dir():
+                    dirs.append({"name": c.name, "git": (c / ".git").exists()})
+        except OSError:
+            pass
+        return {"path": str(d), "parent": str(d.parent) if d.parent != d else None, "git": (d / ".git").exists(), "dirs": dirs}
 
     def update_settings(self, values):
         if not isinstance(values, dict):

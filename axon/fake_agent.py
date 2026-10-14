@@ -3,13 +3,17 @@
 Reads a TOML scenario from the prompt, after the '--- task ---' line:
 
     [[step]]
-    do = "edit"          # edit, prompt, mcp, shell, sleep, hang, orphan, rate_limit, crash, garbage
+    do = "edit"          # edit, prompt, mcp, shell, sleep, read_line, hang, orphan, rate_limit, crash, garbage
     path = "src/x.py"
     attempt = 1          # optional: only run this step on that attempt number
+    phase = "draft"      # optional, brainstorm tasks: only in that phase (clarify, draft, compare, merge, check)
+    role = "lead"        # optional, brainstorm tasks: only for the lead or the other agent
+    has = "text"         # optional: only when Axon's part of the prompt contains it (lacks: only when it does not)
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -27,9 +31,13 @@ def main(prompt):
     scenario = tomllib.loads(prompt.split("--- task ---\n", 1)[1])
     n = int(os.environ.get("AXON_ATTEMPT", "1"))
     mcp = None
+    head, tail = prompt.split("--- task ---\n", 1)
+    asked = head.replace(tail.split("\n", 1)[-1], "")  # what Axon wrote: the scenario (also quoted as the goal) must not match its own filters
+    here = {k: m.group(1) for k in ("phase", "role") if (m := re.search(rf"^Brainstorm {k}: (\w+)$", asked, re.M))}
     emit(type="start", attempt=n)
     for step in scenario.get("step", []):
-        if step.get("attempt", n) != n:
+        if (step.get("attempt", n) != n or any(step.get(k, v) != v for k, v in here.items())
+                or step.get("has", asked) not in asked or ("lacks" in step and step["lacks"] in asked)):
             continue
         do = step["do"]
         if do in ("edit", "prompt"):
@@ -45,6 +53,8 @@ def main(prompt):
             emit(type="shell", rc=r.returncode, out=r.stdout + r.stderr)
         elif do == "sleep":
             time.sleep(step.get("s", 1))
+        elif do == "read_line":  # wait for one line typed into the session (a nudge)
+            emit(type="input", line=sys.stdin.readline().strip())
         elif do == "hang":
             time.sleep(10**6)
         elif do == "orphan":

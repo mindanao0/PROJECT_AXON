@@ -57,13 +57,13 @@ class ReadableLog(unittest.TestCase):
 
 class AskOptions(AxonTest):
     def test_options_are_kept_capped_and_a_number_answers(self):
-        spec = (step("mcp", tool="ask_user", args={"question": "color?", "options": ["red", "blue", " ", "x" * 300] + list("abcd")}, attempt=1)
+        spec = (step("mcp", tool="ask_user", args={"question": "color?", "options": ["red", "blue", " ", "x" * 900] + list("abcd")}, attempt=1)
                 + step("prompt", path="src/prompt.txt", attempt=2)
                 + step("mcp", tool="report_result", args={"status": "done", "summary": "ok"}, attempt=2))
         tid = self.add(spec)
         self.run_all()
         opts = runtime.ask_options(self.store, tid)
-        self.assertEqual((opts[:2], len(opts), len(opts[2])), (["red", "blue"], 6, 120))
+        self.assertEqual((opts[:2], len(opts), len(opts[2])), (["red", "blue"], 6, runtime.OPTION_MAX))
         cli.main(["answer", str(tid), "2"])  # "2" is the second option
         self.run_all()
         self.assertEqual(self.task(tid)["status"], "COMPLETED")

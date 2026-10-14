@@ -64,23 +64,36 @@ def run_checks(rt, t, proj, commit, tip, names=None):
         shutil.rmtree(repo.parent, ignore_errors=True)
 
 
-def integrate(rt, tid):
-    """Merge a COMPLETED task's result into the integration branch if the checks pass on the merged commit."""
+def baseline(rt, project):
+    """Names of the project's checks that already fail on its HEAD."""
+    proj = runtime.load_project(project)
+    head = git(proj["path"], "rev-parse", "--verify", "HEAD")[1]
+    return [n for n, rc, _ in run_checks(rt, {"id": "baseline", "project": project, "checks": None, "approved": 1}, proj, head, head) if rc]
+
+
+def integrate(rt, *tids):
+    """Merge COMPLETED tasks' results into the integration branch if the checks pass on the merged commit.
+    Several ids are merged together and checked once: parallel halves that are only valid together (a task and the
+    one that repairs what its siblings left) cannot pass the checks one by one."""
     try:
-        return _integrate(rt, tid)
+        return _integrate(rt, tids)
     except IntegrationError as e:
-        rt.store.log(tid, None, "integrate-error", error=str(e))
+        rt.store.log(tids[-1], None, "integrate-error", error=str(e))
         raise
 
 
-def _integrate(rt, tid):
+def _integrate(rt, tids):
     s = rt.store
-    t = s.one("select * from tasks where id = ?", tid)
-    if not t or t["status"] != "COMPLETED" or not t["head"] or t["kind"] == "review":
+    ts = [s.one("select * from tasks where id = ?", tid) for tid in tids]
+    if not all(t and t["status"] == "COMPLETED" and t["head"] and not t["kind"] for t in ts):
         raise IntegrationError("only a completed implementation task with a result can be integrated")
-    proj = runtime.load_project(t["project"])
-    if proj["require_review"] and not runtime.review_approved(s, tid, t["head"]):
-        raise IntegrationError("this project requires an approving review of this exact result first")
+    if len({t["project"] for t in ts}) > 1:
+        raise IntegrationError("tasks of one project at a time")
+    proj = runtime.load_project(ts[0]["project"])
+    for t in ts:
+        if proj["require_review"] and not runtime.review_approved(s, t["id"], t["head"]):
+            raise IntegrationError(f"this project requires an approving review of this exact result first (task {t['id']})")
+    t = ts[-1]  # ponytail: the checks are the last task's own; give the group's last task the checks that must hold
     path, ref = proj["path"], REF.format(t["project"])
     with LOCKS[t["project"]]:
         head = git(path, "rev-parse", "HEAD")[1]
@@ -90,21 +103,27 @@ def _integrate(rt, tid):
             tip, conflicts = merge(path, tip, head, "axon: sync with your branch")
             if conflicts:
                 raise IntegrationError(f"your branch and the integration branch conflict in: {', '.join(conflicts)}")
-        if ancestor(path, t["head"], tip):
+        new = tip
+        for u in ts:
+            for dep_id in runtime.deps_of(u):
+                dep = s.one("select head from tasks where id = ?", dep_id)
+                if dep and dep["head"] and not ancestor(path, dep["head"], new):
+                    raise IntegrationError(f"this task builds on task {dep_id}; integrate that first")
+            if ancestor(path, u["head"], new):
+                continue
+            if ancestor(path, new, u["head"]):
+                new = u["head"]
+            else:
+                new, conflicts = merge(path, new, u["head"], f"axon: integrate task {u['id']}")
+                if conflicts:
+                    raise IntegrationError(f"conflicts with the integration branch in: {', '.join(conflicts)}")
+        if new == tip:
             raise IntegrationError("this result is already in the integration branch")
-        dep = t["after"] is not None and s.one("select head from tasks where id = ?", t["after"])
-        if dep and dep["head"] and not ancestor(path, dep["head"], tip):
-            raise IntegrationError(f"this task builds on task {t['after']}; integrate that first")
-        if ancestor(path, tip, t["head"]):
-            new = t["head"]
-        else:
-            new, conflicts = merge(path, tip, t["head"], f"axon: integrate task {tid}")
-            if conflicts:
-                raise IntegrationError(f"conflicts with the integration branch in: {', '.join(conflicts)}")
         results = run_checks(rt, t, proj, new, tip)
         ok = all(rc == 0 for _, rc, _ in results)
-        s.log(tid, None, "integrate", project=t["project"], commit=new, base=tip, ok=ok,
-              checks=[{"name": n, "rc": rc, "tail": rt.redact(tail)} for n, rc, tail in results])
+        for u in ts:
+            s.log(u["id"], None, "integrate", project=u["project"], commit=new, base=tip, ok=ok,
+                  checks=[{"name": n, "rc": rc, "tail": rt.redact(tail)} for n, rc, tail in results])
         if not ok:
             raise IntegrationError("checks failed on the integration commit: " + ", ".join(n for n, rc, _ in results if rc))
         rc, _, err = git(path, "update-ref", ref, new, old or "0" * len(new))

@@ -1,7 +1,9 @@
 """Phase 2: dependencies, bounded revision rounds, delegation, reviews that claim no scope."""
 
 import json
+import threading
 import time
+import unittest.mock
 
 from axon import integrate, runtime
 from test_axon import DONE, AxonTest, edit, step
@@ -29,6 +31,29 @@ class Dependencies(AxonTest):
         self.assertGreaterEqual(started[b], ended[a])
         self.assertEqual(self.shown(f"{b}-1", "src/a/x.py"), "x\n")  # b's checkout contained a's work
 
+    def test_a_task_that_needs_several_results_starts_from_all_of_them_merged(self):
+        a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
+        b = self.add(edit("src/b/y.py") + DONE, scope=["src/b"])
+        c, dup = runtime.add_task(self.store, "p", "fake", edit("src/c/z.py") + DONE, ["src/c"], after=a, needs=[b])
+        self.assertIsNone(dup)
+        self.run_all()
+        self.assertEqual(self.task(c)["status"], "COMPLETED")
+        self.assertNotIn(self.task(c)["base"], (self.task(a)["head"], self.task(b)["head"]))  # a merge of both
+        self.assertEqual((self.shown(f"{c}-1", "src/a/x.py"), self.shown(f"{c}-1", "src/b/y.py")), ("x\n", "x\n"))
+
+    def test_results_that_conflict_fail_the_dependent_with_the_files(self):
+        a = self.add(edit("src/a/x.py", "one\n") + edit("shared.txt", "one\n") + DONE, scope=["src/a", "shared.txt"])
+        b = self.add(edit("src/b/y.py") + edit("shared.txt", "two\n") + DONE, scope=["src/b", "shared.txt"])
+        c, _ = runtime.add_task(self.store, "p", "fake", DONE, ["src/c"], after=a, needs=[b])
+        end = time.time() + 20
+        while time.time() < end and self.task(c)["status"] != "FAILED":
+            self.rt.tick()
+            time.sleep(0.2)
+        for th in self.rt.threads:
+            th.join(20)
+        self.assertEqual(self.task(c)["status"], "FAILED")
+        self.assertIn("shared.txt", self.task(c)["note"])
+
     def test_a_failed_dependency_keeps_the_dependent_queued_and_unstarted(self):
         a = self.add(step("crash", code=3), scope=["src/a"])
         b = self.add_after(edit("src/b/y.py") + DONE, ["src/b"], a)
@@ -45,6 +70,21 @@ class Dependencies(AxonTest):
     def test_dependency_must_be_an_implementation_task_in_the_same_project(self):
         with self.assertRaises(ValueError):
             runtime.add_task(self.store, "p", "fake", DONE, ["src"], after=9999)
+
+    def test_siblings_that_are_only_valid_with_their_repair_integrate_as_a_group(self):
+        self.project({"unique": 'test -z "$(cat src/*/w.txt 2>/dev/null | sort | uniq -d)"'})
+        a = self.add(edit("src/a/w.txt", "w\n") + DONE, scope=["src/a"])
+        b = self.add(edit("src/b/w.txt", "w\n") + DONE, scope=["src/b"])
+        c, _ = runtime.add_task(self.store, "p", "fake", step("shell", cmd="echo v > src/b/w.txt") + DONE, ["src/b"], after=a, needs=[b])
+        self.run_all()
+        integrate.integrate(self.rt, a)
+        with self.assertRaisesRegex(integrate.IntegrationError, "checks failed"):
+            integrate.integrate(self.rt, b)  # a duplicate of a's line, repaired only by c
+        with self.assertRaisesRegex(integrate.IntegrationError, f"builds on task {b}"):
+            integrate.integrate(self.rt, c)
+        self.assertTrue(integrate.integrate(self.rt, b, c))
+        with self.assertRaisesRegex(integrate.IntegrationError, "already in"):
+            integrate.integrate(self.rt, b, c)
 
     def test_a_dependent_cannot_be_integrated_before_its_dependency(self):
         a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
@@ -143,6 +183,62 @@ class Delegation(AxonTest):
         runtime.stop_task(self.store, other)
         for th in self.rt.threads:
             th.join(30)
+
+
+class AskPeer(AxonTest):
+    """claude <-> codex questions, with the fake agent standing in for both (PEER maps it to itself)."""
+
+    def setUp(self):
+        super().setUp()
+        self.peer = unittest.mock.patch.dict(runtime.PEER, {"fake": "fake"})
+        self.peer.start()
+        self.addCleanup(self.peer.stop)
+        self.live = True
+        threading.Thread(target=self.tick_while_live, daemon=True).start()  # the runner, while the test asks by hand
+        self.addCleanup(setattr, self, "live", False)
+
+    def tick_while_live(self):
+        while self.live:
+            self.rt.tick()
+            time.sleep(0.2)
+
+    def test_agent_asks_its_peer_and_gets_the_answer_back(self):
+        question = verdict("done", "use the cache")  # the fake peer reads its question as its script
+        asker = self.add(step("mcp", tool="ask_peer", args={"question": question}) + edit("src/p.py") + DONE)
+        self.run_all()
+        (ask,) = self.store.q("select * from tasks where kind = 'ask'")
+        self.assertEqual((self.task(asker)["status"], ask["status"], ask["target"]), ("COMPLETED", "COMPLETED", asker))
+        self.assertIn("use the cache", runtime.attempt_log(f"{asker}-1").read_text())  # the asker saw the answer
+        with self.assertRaises(ValueError):  # a question is not a result
+            runtime.request_review(self.store, ask["id"], "fake")
+        with self.assertRaises(ValueError):
+            runtime.apply_result(self.store, ask["id"])
+
+    def test_questions_are_bounded_and_only_for_implementation_tasks(self):
+        asker = self.add(step("hang"))
+        self.wait(lambda: self.store.one("select 1 from attempts where task = ? and status = 'running'", asker))
+        aid = f"{asker}-1"
+        for i in range(3):
+            self.assertTrue(self.rt._ask_peer(self.task(asker), aid, {"question": verdict("done", f"a{i}")})[0])
+        self.assertIn("limit", self.rt._ask_peer(self.task(asker), aid, {"question": verdict("done", "a3")})[1])
+        ask = self.store.one("select * from tasks where kind = 'ask'")
+        self.assertEqual(self.rt._ask_peer(ask, aid, {"question": "q"}), (False, "this task cannot ask a peer"))
+        self.assertFalse(self.rt._ask_peer(self.task(asker), aid, {"question": " "})[0])
+        runtime.stop_task(self.store, asker)
+        for th in self.rt.threads:
+            th.join(30)
+
+    def test_a_peer_that_never_answers_is_given_up_on(self):
+        self.rt.cfg["limits"]["ask_timeout"] = 2
+        asker = self.add(step("hang"))
+        self.wait(lambda: self.store.one("select 1 from attempts where task = ? and status = 'running'", asker))
+        ok, msg = self.rt._ask_peer(self.task(asker), f"{asker}-1", {"question": step("hang")})
+        self.assertFalse(ok)
+        self.assertIn("did not answer", msg)
+        runtime.stop_task(self.store, asker)
+        for th in self.rt.threads:
+            th.join(30)
+        self.assertIn(self.store.one("select status from tasks where kind = 'ask'")["status"], ("CANCELLED", "FAILED"))
 
 
 class IntegrationReview(AxonTest):
@@ -280,3 +376,73 @@ class TaskChecks(AxonTest):
         self.run_all()
         prompt = (self.tmp / "home" / "attempts" / f"{a}-1" / "prompt.txt").read_text()
         self.assertIn("Your result is verified by: a; the others belong to parallel work.", prompt)
+
+
+class AskThenReport(AxonTest):
+    def test_a_question_is_not_lost_when_the_agent_reports_after_asking(self):
+        tid = self.add(step("mcp", tool="ask_user", args={"question": "which database?"})
+                       + step("mcp", tool="report_result", args={"status": "done", "summary": "asked"}))
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "WAITING_INPUT")  # not COMPLETED: the user still has to answer
+        self.assertIn("which database?", self.task(tid)["note"])
+
+    def test_a_long_choice_comes_back_whole(self):
+        long = "one row per word: file, word_count, word, frequency; a file with no words gets one row with an empty word and frequency"
+        tid = self.add(step("mcp", tool="ask_user", args={"question": "csv?", "options": [long, "x" * 900]}))
+        self.run_all()
+        options = runtime.ask_options(self.store, tid)
+        self.assertEqual(options[0], long)  # was cut at 120 characters, so the agent could not tell what had been chosen
+        self.assertEqual(len(options[1]), runtime.OPTION_MAX)
+
+
+class PrepareAndReviewWithDependencies(AxonTest):
+    """Projects with a `prepare` step (runs with network) and `require_review`: dependencies must not slip past either."""
+    def setUp(self):
+        super().setUp()
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text().replace("protected", "require_review = true\nprotected", 1)
+                       + '[prepare]\ninstall = "true"\n[sandbox]\nprepare_inputs = ["pyproject.toml"]\n')
+
+    def test_a_dependent_of_a_task_that_changed_dependency_files_waits_for_approval(self):
+        a = self.add(edit("pyproject.toml", "[project]\n") + DONE, scope=["pyproject.toml"])
+        b, _ = runtime.add_task(self.store, "p", "fake", edit("src/b/y.py") + DONE, ["src/b"], after=a)
+        self.run_all()
+        self.assertEqual(self.task(b)["status"], "WAITING_APPROVAL")
+        self.assertIn("dependency files changed", self.task(b)["note"])
+        self.assertTrue(runtime.approve(self.store, b))
+        self.run_all()
+        self.assertEqual(self.task(b)["status"], "COMPLETED")
+
+    def test_a_dependent_of_plain_source_changes_just_runs(self):
+        a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
+        b = self.add(edit("src/b/y.py") + DONE, scope=["src/b"])
+        c, _ = runtime.add_task(self.store, "p", "fake", edit("src/c/z.py") + DONE, ["src/c"], after=a, needs=[b])
+        self.run_all()
+        self.assertEqual(self.task(c)["status"], "COMPLETED")
+        self.assertEqual(len(self.store.q("select 1 from events where task = ? and kind = 'prepare'", c)), 1)
+
+    def test_a_dependent_still_needs_its_own_review_to_integrate(self):
+        a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
+        b, _ = runtime.add_task(self.store, "p", "fake", edit("src/b/y.py") + DONE, ["src/b"], after=a)
+        self.run_all()
+        with self.assertRaisesRegex(integrate.IntegrationError, "requires an approving review"):
+            integrate.integrate(self.rt, b)
+
+    def test_baseline_runs_prepare_first_and_names_what_is_red(self):
+        self.assertEqual(integrate.baseline(self.rt, "p"), [])
+        self.project({"ok": "true", "red": "false"})
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text() + '[prepare]\ninstall = "true"\n')
+        self.assertEqual(integrate.baseline(self.rt, "p"), ["red"])
+
+    def test_a_failing_prepare_is_the_baseline_problem(self):
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text().replace('install = "true"', 'install = "false"'))
+        self.assertEqual(integrate.baseline(self.rt, "p"), ["prepare install"])
+
+
+class AgentEnvironment(AxonTest):
+    def test_an_agent_cannot_leave_bytecode_in_its_result(self):
+        tid = self.add(step("shell", cmd='python3 -c "import os; open(\'src/seen\', \'w\').write(os.environ[\'PYTHONDONTWRITEBYTECODE\'])"') + DONE)
+        self.run_all()
+        self.assertEqual(self.shown(f"{tid}-1", "src/seen"), "1")

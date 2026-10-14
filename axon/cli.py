@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import agent_options, helper, integrate, retention, runtime, sandbox, usage
+from . import agent_options, brainstorm, helper, integrate, retention, runtime, sandbox, usage
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
 NEEDS_YOU = {"WAITING_INPUT": "answer it: axon answer {id}", "WAITING_APPROVAL": "approve it: axon approve {id}",
@@ -263,6 +263,99 @@ def doctor(name):
     return 1 if bad else 0
 
 
+def show_brainstorm(store, bid):
+    b = brainstorm.describe(store, bid)
+    if not b:
+        sys.exit(f"no brainstorm {bid}")
+    print(f"brainstorm {b['id']}  {b['status']}  phase {b['phase']}  {b['project_id']}  lead {b['agents']['lead']}, other {b['agents']['other']}")
+    print(f"goal: {b['goal'].strip().splitlines()[0][:200]}")
+    if b["why"]:
+        print(f"why: {b['why']}")
+    if b["collecting"]:
+        print("\ncollecting questions from both agents, so you answer each thing once ...")
+    for q in b["questions"]:
+        if q.get("gate"):
+            print(f"\n{q['agent']} asked; merged into one list:\n{q['question']}\n  answer with: axon brainstorm {b['id']} --answer")
+            continue
+        opts = f"  options: {' | '.join(q['options'])}" if q["options"] else ""
+        print(f"\n{q['agent']} asks: {q['question']}{opts}\n  answer with: axon answer {q['task_id']}")
+    if b["qa"]:
+        print("\nanswers so far:", *[f"  Q ({x['by']}): {x['q']}\n  A: {x['a']}" for x in b["qa"]], sep="\n")
+    plan = b["plan"]
+    if plan:
+        print(f"\nplan: {plan.get('summary', '')}")
+        for ph in plan["phases"]:
+            state = "done" if ph["done"] else "started" if ph["started"] else "breaking down ..." if ph["expanding"] else "" if ph["tasks"] else "no tasks yet"
+            print(f"  phase {ph['id']}: {ph['title']}  {state}")
+            for t in ph["tasks"]:
+                print(f"    {t['id']}  [{t['agent']}, by {t.get('by', '?')}]  {t['title']}  scope {','.join(t['scope'])}"
+                      + (f"  after {t['after']}" if t.get("after") else ""))
+        if b["expand_error"]:
+            print(f"\n{b['expand_error']}")
+        for dsg in plan.get("disagreements") or []:
+            print(f"  disagree: {dsg.get('topic')}\n    claude: {dsg.get('claude')}\n    codex: {dsg.get('codex')}")
+        for r in plan.get("risks") or []:
+            print(f"  risk: {r}")
+        if b["objections"]:
+            print(f"\nthe checker still objects:\n{b['objections']}")
+        if b["files"]:
+            print(f"\nfiles: {b['files'].get('human')}  (for you)   {b['files'].get('ai')}  (for an agent)")
+        if b["status"] == "READY":
+            print("\nwhat each agent will be given (approve means exactly this):")
+            for t in (t for ph in plan["phases"] for t in ph["tasks"]):
+                print(f"\n[{t['id']}] " + t["brief"].replace("\n", "\n    "))
+            print(f"\nbreak the next phase into tasks: axon brainstorm {b['id']} --expand    start it: axon brainstorm {b['id']} --approve")
+        elif b["created"]:
+            print("\ncreated tasks:", ", ".join(f"{k} -> {v}" for k, v in b["created"].items()))
+
+
+def brainstorm_cmd(store, a):
+    if not a.target:
+        for b in brainstorm.recent(store, 20):
+            print(f"{b['id']:>4}  {b['status']:<9} {b['phase']:<8} {b['project_id']:<12} {b['goal'].strip().splitlines()[0][:70]}")
+        return
+    if a.target.isdigit():
+        bid = int(a.target)
+        try:
+            if a.stop:
+                brainstorm.cancel(store, bid)
+                print("stopped")
+            elif a.answer:
+                gate = next((q for q in brainstorm.describe(store, bid)["questions"] if q.get("gate")), None)
+                if not gate:
+                    sys.exit("no merged questions are waiting for an answer")
+                answers = []
+                for i, q in enumerate(gate["questions"], 1):
+                    print(f"{i}) {q['question']}\n   (asked by: {'; '.join(q['from'])})")
+                    print(*(f"     {j}. {o}" for j, o in enumerate(q["options"], 1)), sep="\n")
+                    x = input("   answer" + (" (number or text): " if q["options"] else ": ")).strip()
+                    answers.append(q["options"][int(x) - 1] if q["options"] and x.isdigit() and 1 <= int(x) <= len(q["options"]) else x)
+                brainstorm.answer_gate(store, bid, answers)
+                print("sent to both agents")
+            elif a.expand:
+                brainstorm.expand(store, bid, None if a.expand == "next" else a.expand)
+                print("the lead is breaking the phase into tasks; look with: axon brainstorm", bid)
+            elif a.approve:
+                if not a.force and (why := brainstorm.baseline_error(runtime.Runtime(store), bid)):
+                    sys.exit(why + " (--force)")
+                print("queued:", ", ".join(f"{k} -> task {v}" for k, v in brainstorm.create_tasks(store, bid, a.phase).items()))
+            else:
+                show_brainstorm(store, bid)
+        except ValueError as e:
+            sys.exit(str(e))
+        return
+    goal = sys.stdin.read() if a.target == "-" else a.target
+    opts = {r: {k: getattr(a, f"{r}_{k}") for k in ("model", "effort", "light_model", "light_effort")} for r in ("lead", "other")}
+    try:
+        bid = brainstorm.start(store, project_arg(a.project), goal, a.lead, a.other, opts)
+    except (ValueError, subprocess.CalledProcessError) as e:
+        sys.exit(str(e))
+    print(bid)
+    if not runtime.runner_active():
+        print("note: nothing is running tasks yet; open `axon` (GUI) or run `axon service install` once", file=sys.stderr)
+    print(f"the agents may ask you questions: axon brainstorm {bid}   shows them and the progress", file=sys.stderr)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if not argv or (argv[0].startswith("-") and argv[0] not in ("-h", "--help")):
@@ -287,6 +380,21 @@ def main(argv=None):
                    help="verify this task with only these project checks (repeatable); integration still runs all")
     a.add_argument("-f", "--follow", action="store_true", help="then show the agent's output live, as `axon logs -f`")
     a.add_argument("spec", help="what to do (short is fine), or - to read it from stdin")
+    bs = sub.add_parser("brainstorm", help="Claude and Codex plan together first: axon brainstorm \"goal\" | ID [--approve|--stop] | (list)")
+    bs.add_argument("target", nargs="?", help="the goal (text, or - for stdin) to start one, or the id of one to show; omit to list")
+    bs.add_argument("-p", "--project", help="default: the project of the current folder")
+    bs.add_argument("--lead", choices=sorted(runtime.ADAPTERS), help="asks first and writes the merged plan (default: [brainstorm] lead)")
+    bs.add_argument("--other", choices=sorted(runtime.ADAPTERS), help="the second planner and the checker (default: [brainstorm] other)")
+    for role in ("lead", "other"):
+        for k in ("model", "effort", "light-model", "light-effort"):
+            bs.add_argument(f"--{role}-{k}", default="", help=f"{k.replace('-', ' ')} for the {role} in this brainstorm only"
+                            + (" (the steps that only ask and check)" if "light" in k else ""))
+    bs.add_argument("--approve", action="store_true", help="turn a phase of a finished plan into queued tasks (--phase ID; default: the first not started)")
+    bs.add_argument("--phase", help="the phase --approve starts (a started one: makes its failed or stopped tasks again)")
+    bs.add_argument("--force", action="store_true", help="--approve even though the project's checks already fail")
+    bs.add_argument("--expand", nargs="?", const="next", metavar="PHASE", help="have the lead break a phase into tasks (default: the first not started)")
+    bs.add_argument("--answer", action="store_true", help="answer the merged questions both agents are waiting on")
+    bs.add_argument("--stop", action="store_true", help="stop a running brainstorm")
     sub.add_parser("ls", help="list tasks (running ones show how long and when they last wrote output)")
     sub.add_parser("run", help="run tasks in this terminal, without the GUI (one runner per machine)")
     for name, help_ in [("show", "task details and events"), ("stop", "stop or cancel a task"),
@@ -295,7 +403,7 @@ def main(argv=None):
                         ("apply", "write a completed task's changes into your project folder (uncommitted)")]:
         sub.add_parser(name, help=help_).add_argument("id", type=int)
     sub.add_parser("summarize", help="summarize a task with the local model (sources cited)").add_argument("id", type=int)
-    sub.add_parser("integrate", help="merge a completed task into the integration branch (checks run on the result)").add_argument("id", type=int)
+    sub.add_parser("integrate", help="merge completed tasks into the integration branch (checks run once on the result)").add_argument("id", type=int, nargs="+")
     rv = sub.add_parser("review", help="queue a read-only review of a completed task's exact result")
     rv.add_argument("id", type=int)
     rv.add_argument("-a", "--agent", default="claude", choices=sorted(runtime.ADAPTERS), help="default: claude")
@@ -385,6 +493,8 @@ def main(argv=None):
             logs(store, tid, True)
         else:
             print(f"queued for {args.agent} on {project}; watch it live: axon logs -f {tid}", file=sys.stderr)
+    elif args.cmd == "brainstorm":
+        brainstorm_cmd(store, args)
     elif args.cmd == "ls":
         show_tasks(store)
     elif args.cmd == "show":
@@ -401,7 +511,7 @@ def main(argv=None):
     elif args.cmd == "integrate":
         rt = runtime.Runtime(store)
         try:
-            commit = integrate.integrate(rt, args.id)
+            commit = integrate.integrate(rt, *args.id)
         except integrate.IntegrationError as e:
             sys.exit(f"not integrated: {e}")
         print(f"integrated at {commit[:10]}; checks passed")
@@ -490,14 +600,28 @@ def main(argv=None):
         t = store.one("select status, note from tasks where id = ?", args.id)
         if not t or t["status"] != "WAITING_INPUT":
             sys.exit(f"task {args.id} is not waiting for input")
-        options, text = runtime.ask_options(store, args.id), args.text
-        if text is None:  # ask here, with the agent's own choices numbered
+        if bid := brainstorm.held(store, args.id):
+            sys.exit(f"these questions were merged with the other agent's: answer them with axon brainstorm {bid} --answer")
+        options, text, qs = runtime.ask_options(store, args.id), args.text, runtime.ask_questions(store, args.id)
+        if text is None and qs:  # several questions: one at a time, each with its own numbered choices
+            answers = []
+            for i, q in enumerate(qs, 1):
+                print(f"{i}) {q['question']}")
+                print(*(f"     {j}. {o}" for j, o in enumerate(q["options"], 1)), sep="\n")
+                a = input("   answer" + (" (number or text): " if q["options"] else ": ")).strip()
+                answers.append(q["options"][int(a) - 1] if q["options"] and a.isdigit() and 1 <= int(a) <= len(q["options"]) else a)
+            text = "\n".join(f"{i}) {a}" for i, a in enumerate(answers, 1)) if all(answers) else ""
+        elif text is None:  # ask here, with the agent's own choices numbered
             print(t["note"])
             print(*(f"  {i}) {o}" for i, o in enumerate(options, 1)), sep="\n")
             text = input("answer" + (" (number or text): " if options else ": ")).strip()
         if options and text.isdigit() and 1 <= int(text) <= len(options):
             text = options[int(text) - 1]
-        if not text or not runtime.answer(store, args.id, text):
+        try:
+            answered = bool(text) and runtime.answer(store, args.id, text)
+        except ValueError as e:
+            sys.exit(str(e))
+        if not answered:
             sys.exit(f"task {args.id} is not waiting for input" if text else "empty answer")
     elif args.cmd == "approve":
         if not runtime.approve(store, args.id):

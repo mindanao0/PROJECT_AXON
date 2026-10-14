@@ -22,6 +22,10 @@ create table if not exists attempts(
 create table if not exists events(
   id integer primary key, task integer, attempt text, kind text not null,
   data text not null, at real not null);
+-- A brainstorm: Claude and Codex plan together before any code is written (axon/brainstorm.py). `data` is its JSON state.
+create table if not exists brainstorms(
+  id integer primary key, project text not null, goal text not null, phase text not null,
+  status text not null, data text not null, created real not null, updated real not null);
 create table if not exists meta(key text primary key, value text not null);
 create table if not exists cooldowns(
   agent text primary key, until real not null, strikes integer not null);
@@ -36,7 +40,7 @@ class Store:
             c.executescript(SCHEMA)
             for table, cols in (("tasks", (("kind", "text not null default ''"), ("target", "integer"), ("after", "integer"),
                                            ("parent", "integer"), ("round", "integer not null default 0"), ("checks", "text"),
-                                           ("model", "text"), ("effort", "text"))),
+                                           ("model", "text"), ("effort", "text"), ("needs", "text"))),
                                 ("attempts", (("prompt_bytes", "integer"), ("usage", "text"),
                                               ("model", "text"), ("effort", "text")))):
                 have = {r["name"] for r in c.execute(f"pragma table_info({table})")}
