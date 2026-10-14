@@ -36,6 +36,13 @@ TOOLS = [
                     "Waits for the answer; limited in number.",
      "inputSchema": {"type": "object", "required": ["question"], "properties": {
          "question": {"type": "string"}}}},
+    {"name": "delete_file",
+     "description": "Delete a file inside your scope (there is no shell). Only Claude can; other agents must ask first.",
+     "inputSchema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}}},
+    {"name": "move_file",
+     "description": "Move or rename a file inside your scope; the destination must not exist. Only Claude can; other agents must ask first.",
+     "inputSchema": {"type": "object", "required": ["from", "to"], "properties": {
+         "from": {"type": "string"}, "to": {"type": "string"}}}},
     {"name": "run_check",
      "description": "Run a project check (tests, lint) in a sandbox without network. "
                     "Returns the exit code and the end of the output.",

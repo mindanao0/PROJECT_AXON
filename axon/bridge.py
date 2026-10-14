@@ -453,6 +453,11 @@ class Bridge:
             except (ValueError, subprocess.CalledProcessError) as e:
                 raise ControlError(f"Cannot start: {e}"[:300])
             return {"brainstorm_id": str(bid)}
+        if action == "brainstorm_integrate":
+            try:
+                return self.start_integrate_phase(int(p.get("brainstorm_id")), p.get("phase") or None)
+            except (TypeError, ValueError) as e:
+                raise ControlError(str(e)[:300])
         if action in ("brainstorm_create_tasks", "brainstorm_expand", "brainstorm_stop", "brainstorm_answer"):
             try:
                 bid = int(p.get("brainstorm_id"))
@@ -556,6 +561,29 @@ class Bridge:
         if not ok:
             raise ControlError(f"{action} is not possible while the task is {st}")
         return out
+
+    def start_integrate_phase(self, bid, pid):
+        """Integrate a finished phase (D-039): every task in order, a group where the checks only pass together."""
+        ids = brainstorm.phase_task_ids(self.store, bid, pid)
+        project = self.store.one("select project from tasks where id = ?", ids[0])["project"]
+        with self.lock:
+            if project in self.integrating:
+                raise ControlError("An integration is already running for this project")
+            self.integrating[project] = ids[0]
+
+        def work():
+            try:
+                brainstorm.integrate_tasks(self.rt, ids)
+            except integrate.IntegrationError:
+                pass  # recorded as an event the GUI shows
+            except Exception as e:
+                self.store.log(ids[0], None, "integrate-error", error=f"unexpected: {e!r}"[:300])
+            finally:
+                with self.lock:
+                    self.integrating.pop(project, None)
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "message": f"Integrating {len(ids)} tasks in order; checks run on each merge. Watch the activity log."}
 
     def start_integrate(self, t):
         if t["status"] != "COMPLETED" or not t["head"]:

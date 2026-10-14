@@ -42,7 +42,7 @@ SCHEMA = """{"goal": "...", "summary": "...", "design": "how it fits together an
 Phases run one after another. If the whole goal needs at most """ + str(PHASE_CAP) + """ tasks, write them all (one phase is fine). If it needs more,
 write the phases only and leave every "tasks" empty: each phase is broken into tasks later, when the phases before it are done and
 their results are known. Each task is read later by an agent that has seen nothing of this brainstorm: it must make sense on its own.
-A task starts from the project as it is plus the results of the tasks in its "after", and sees nothing of any other task (tasks without a dependency between them run at the same time): so a task that needs a file another task writes must list that task in "after", and every file belongs to the scope of one task only. Claude has no shell: it cannot delete, move or rename a file, so give any task that does to codex. Neither runs git (Axon records their work itself): no step or acceptance item may use git; say \"delete the file\" and check it with python or ls."""
+A task starts from the project as it is plus the results of the tasks in its "after", and sees nothing of any other task (tasks without a dependency between them run at the same time): so a task that needs a file another task writes must list that task in "after", and every file belongs to the scope of one task only. Only claude deletes, moves or renames files (it has tools for that and no shell): give any such task to claude; a codex result that removes a file waits for the user. Neither runs git (Axon records their work itself): no step or acceptance item may use git; say \"delete the file\" and check it with python or ls."""
 RULES = ("Nothing is built in a brainstorm: read the code if it helps, never edit files.",
          "Never guess or assume. Anything unclear or unknown: call ask_user, at any time and as often as needed. "
          "Ask everything you need in ONE call, as questions=[{question, options}]; give every question whose answer is a choice its own "
@@ -511,7 +511,10 @@ def prompt(rt, t):
                   "--- results of the finished phases ---", *(done or ["(none yet)"]),
                   "--- the phase to break into tasks ---", red(json.dumps(next(ph for ph in phases_of(d["plan"]) if ph["id"] == pid)))]
     if phase in ("merge", "expand"):
-        lines.append("--- the project's checks (a task may name a subset in \"checks\") ---\n" + (", ".join(runtime.load_project(b["project"])["checks"]) or "none"))
+        proj = runtime.load_project(b["project"])
+        lines.append("--- the project's checks (a task may name a subset in \"checks\") ---\n" + (", ".join(proj["checks"]) or "none"))
+        lines.append("--- protected paths: a task whose result touches one waits for the user's approval, so keep such edits in few "
+                     "tasks and name them in the objective ---\n" + (", ".join(proj["protected"]) or "none"))
     if phase in ("merge", "expand") and d.get("fix"):
         lines.append(d["fix"])
     if phase == "check":
@@ -673,6 +676,59 @@ def create_tasks(store, bid, pid=None):
         ids[t["id"]] = tid or dup
     _save(store, bid, d, status="DONE" if all(x[1] for x in _progress(store, d)) else "READY")
     return ids
+
+
+def phase_task_ids(store, bid, pid=None):
+    """The real tasks of phase `pid` (default: every phase that is done, from the first) in the order to integrate them.
+    ValueError when the phase has tasks that are not COMPLETED."""
+    b, d = _load(store, bid)
+    if not b:
+        raise ValueError("no such brainstorm")
+    prog = _progress(store, d)
+    if pid and not any(x[0]["id"] == pid for x in prog):
+        raise ValueError(f"no phase {pid}")
+    ids = []
+    for ph, started, done, _ in prog:
+        if pid and ph["id"] != pid:
+            continue
+        mine = sorted(d["created"][t["id"]] for t in ph.get("tasks") or [] if d.get("created", {}).get(t["id"]))
+        if pid and not done:
+            raise ValueError(f"phase {ph['id']} is not finished: its tasks must all be completed first")
+        if not done:
+            break
+        ids += mine  # ponytail: ids ascend with dependencies (a task is made after what it waits for); sort by deps if that ever stops holding
+    if not ids:
+        raise ValueError("no finished phase to integrate")
+    return ids
+
+
+def integrate_tasks(rt, ids):
+    """Put the tasks on the project's integration branch, each as soon as the checks allow. Tasks whose checks fail one by one
+    (parallel parts that only hold together, and the task that repairs them) are tried together with the ones after them.
+    Returns the groups that went in. IntegrationError when a group never passes or something else stops it."""
+    from . import integrate
+    s = rt.store
+    path, ref = None, None
+    groups, group = [], []
+    for i in ids:
+        t = s.one("select project, head from tasks where id = ?", i)
+        path = path or runtime.load_project(t["project"])["path"]
+        ref = ref or integrate.REF.format(t["project"])
+        tip = integrate.git(path, "rev-parse", "--verify", "-q", ref)[1]
+        if tip and integrate.ancestor(path, t["head"], tip):
+            continue  # already in
+        group.append(i)
+        try:
+            integrate.integrate(rt, *group)
+        except integrate.IntegrationError as e:
+            if not str(e).startswith("checks failed"):
+                raise
+            continue
+        groups.append(group)
+        group = []
+    if group:
+        raise integrate.IntegrationError(f"tasks {', '.join(map(str, group))} fail the checks even together")
+    return groups
 
 
 def expand(store, bid, pid=None):

@@ -86,6 +86,16 @@ class Dependencies(AxonTest):
         with self.assertRaisesRegex(integrate.IntegrationError, "already in"):
             integrate.integrate(self.rt, b, c)
 
+    def test_integrating_tasks_in_order_groups_the_ones_that_only_pass_together(self):
+        from axon import brainstorm
+        self.project({"unique": 'test -z "$(cat src/*/w.txt 2>/dev/null | sort | uniq -d)"'})
+        a = self.add(edit("src/a/w.txt", "w\n") + DONE, scope=["src/a"])
+        b = self.add(edit("src/b/w.txt", "w\n") + DONE, scope=["src/b"])
+        c, _ = runtime.add_task(self.store, "p", "fake", step("shell", cmd="echo v > src/b/w.txt") + DONE, ["src/b"], after=a, needs=[b])
+        self.run_all()
+        self.assertEqual(brainstorm.integrate_tasks(self.rt, [a, b, c]), [[a], [b, c]])
+        self.assertEqual(brainstorm.integrate_tasks(self.rt, [a, b, c]), [])  # everything is in already
+
     def test_a_dependent_cannot_be_integrated_before_its_dependency(self):
         a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
         b = self.add_after(edit("src/b/y.py") + DONE, ["src/b"], a)
@@ -446,3 +456,38 @@ class AgentEnvironment(AxonTest):
         tid = self.add(step("shell", cmd='python3 -c "import os; open(\'src/seen\', \'w\').write(os.environ[\'PYTHONDONTWRITEBYTECODE\'])"') + DONE)
         self.run_all()
         self.assertEqual(self.shown(f"{tid}-1", "src/seen"), "1")
+
+
+class FileOperations(AxonTest):
+    """D-040: Claude deletes and moves files through tools; any other agent asks first and a removal of its waits for the user."""
+    def run_as(self, agent, *steps):
+        with unittest.mock.patch.object(runtime, "CAN_MOVE", {agent}):
+            tid = self.add("".join(steps), scope=["src"])
+            self.run_all()
+        return tid
+
+    def test_the_agent_that_may_delete_and_move_files_can(self):
+        tool = lambda name, **a: step("mcp", tool=name, args=a)
+        tid = self.run_as("fake", tool("delete_file", path="src/a.py"), edit("src/new.py"), tool("move_file", **{"from": "src/new.py", "to": "src/sub/moved.py"}),
+                          tool("move_file", **{"from": "docs/b.md", "to": "src/b.md"}), DONE)  # the last is outside its scope: refused
+        self.assertEqual(self.task(tid)["status"], "COMPLETED")
+        tree = self.git("ls-tree", "-r", "--name-only", f"refs/axon/attempts/{tid}-1").split()
+        self.assertTrue({"src/sub/moved.py", "docs/b.md"} <= set(tree) and not {"src/a.py", "src/new.py", "src/b.md"} & set(tree), tree)
+
+    def test_paths_outside_the_clone_and_directories_are_refused(self):
+        t = {"agent": "claude", "kind": "", "scope": json.dumps(["src"])}
+        for args in ({"path": "../x"}, {"path": "/etc/passwd"}, {"path": ".git/HEAD"}, {"path": "src"}, {"path": "src/none.py"}, {"path": "docs/b.md"}):
+            ok, msg = self.rt._file_op(t, self.tmp / "proj", "delete_file", args)
+            self.assertFalse(ok, args)
+            self.assertTrue((self.tmp / "proj" / "src" / "a.py").exists())
+        ok, msg = self.rt._file_op(t, self.tmp / "proj", "move_file", {"from": "src/a.py", "to": "src/a.py"})
+        self.assertFalse(ok)  # the destination exists
+
+    def test_another_agent_is_told_to_ask_and_its_removal_waits_for_the_user(self):
+        tid = self.run_as("codex", step("mcp", tool="delete_file", args={"path": "src/a.py"}), step("shell", cmd="rm src/a.py"), DONE)
+        task = self.task(tid)
+        self.assertEqual(task["status"], "REVIEW")
+        self.assertIn("removes: src/a.py", task["note"])
+        ok, msg = self.rt._file_op({"agent": "codex", "kind": "", "scope": '["src"]'}, self.tmp / "proj", "delete_file", {"path": "src/a.py"})
+        self.assertFalse(ok)
+        self.assertIn("ask_peer", msg)
