@@ -71,6 +71,21 @@ class Dependencies(AxonTest):
         with self.assertRaises(ValueError):
             runtime.add_task(self.store, "p", "fake", DONE, ["src"], after=9999)
 
+    def test_siblings_that_are_only_valid_with_their_repair_integrate_as_a_group(self):
+        self.project({"unique": 'test -z "$(cat src/*/w.txt 2>/dev/null | sort | uniq -d)"'})
+        a = self.add(edit("src/a/w.txt", "w\n") + DONE, scope=["src/a"])
+        b = self.add(edit("src/b/w.txt", "w\n") + DONE, scope=["src/b"])
+        c, _ = runtime.add_task(self.store, "p", "fake", step("shell", cmd="echo v > src/b/w.txt") + DONE, ["src/b"], after=a, needs=[b])
+        self.run_all()
+        integrate.integrate(self.rt, a)
+        with self.assertRaisesRegex(integrate.IntegrationError, "checks failed"):
+            integrate.integrate(self.rt, b)  # a duplicate of a's line, repaired only by c
+        with self.assertRaisesRegex(integrate.IntegrationError, f"builds on task {b}"):
+            integrate.integrate(self.rt, c)
+        self.assertTrue(integrate.integrate(self.rt, b, c))
+        with self.assertRaisesRegex(integrate.IntegrationError, "already in"):
+            integrate.integrate(self.rt, b, c)
+
     def test_a_dependent_cannot_be_integrated_before_its_dependency(self):
         a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
         b = self.add_after(edit("src/b/y.py") + DONE, ["src/b"], a)
@@ -378,3 +393,56 @@ class AskThenReport(AxonTest):
         options = runtime.ask_options(self.store, tid)
         self.assertEqual(options[0], long)  # was cut at 120 characters, so the agent could not tell what had been chosen
         self.assertEqual(len(options[1]), runtime.OPTION_MAX)
+
+
+class PrepareAndReviewWithDependencies(AxonTest):
+    """Projects with a `prepare` step (runs with network) and `require_review`: dependencies must not slip past either."""
+    def setUp(self):
+        super().setUp()
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text().replace("protected", "require_review = true\nprotected", 1)
+                       + '[prepare]\ninstall = "true"\n[sandbox]\nprepare_inputs = ["pyproject.toml"]\n')
+
+    def test_a_dependent_of_a_task_that_changed_dependency_files_waits_for_approval(self):
+        a = self.add(edit("pyproject.toml", "[project]\n") + DONE, scope=["pyproject.toml"])
+        b, _ = runtime.add_task(self.store, "p", "fake", edit("src/b/y.py") + DONE, ["src/b"], after=a)
+        self.run_all()
+        self.assertEqual(self.task(b)["status"], "WAITING_APPROVAL")
+        self.assertIn("dependency files changed", self.task(b)["note"])
+        self.assertTrue(runtime.approve(self.store, b))
+        self.run_all()
+        self.assertEqual(self.task(b)["status"], "COMPLETED")
+
+    def test_a_dependent_of_plain_source_changes_just_runs(self):
+        a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
+        b = self.add(edit("src/b/y.py") + DONE, scope=["src/b"])
+        c, _ = runtime.add_task(self.store, "p", "fake", edit("src/c/z.py") + DONE, ["src/c"], after=a, needs=[b])
+        self.run_all()
+        self.assertEqual(self.task(c)["status"], "COMPLETED")
+        self.assertEqual(len(self.store.q("select 1 from events where task = ? and kind = 'prepare'", c)), 1)
+
+    def test_a_dependent_still_needs_its_own_review_to_integrate(self):
+        a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
+        b, _ = runtime.add_task(self.store, "p", "fake", edit("src/b/y.py") + DONE, ["src/b"], after=a)
+        self.run_all()
+        with self.assertRaisesRegex(integrate.IntegrationError, "requires an approving review"):
+            integrate.integrate(self.rt, b)
+
+    def test_baseline_runs_prepare_first_and_names_what_is_red(self):
+        self.assertEqual(integrate.baseline(self.rt, "p"), [])
+        self.project({"ok": "true", "red": "false"})
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text() + '[prepare]\ninstall = "true"\n')
+        self.assertEqual(integrate.baseline(self.rt, "p"), ["red"])
+
+    def test_a_failing_prepare_is_the_baseline_problem(self):
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text().replace('install = "true"', 'install = "false"'))
+        self.assertEqual(integrate.baseline(self.rt, "p"), ["prepare install"])
+
+
+class AgentEnvironment(AxonTest):
+    def test_an_agent_cannot_leave_bytecode_in_its_result(self):
+        tid = self.add(step("shell", cmd='python3 -c "import os; open(\'src/seen\', \'w\').write(os.environ[\'PYTHONDONTWRITEBYTECODE\'])"') + DONE)
+        self.run_all()
+        self.assertEqual(self.shown(f"{tid}-1", "src/seen"), "1")

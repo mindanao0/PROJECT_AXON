@@ -403,7 +403,7 @@ def main(argv=None):
                         ("apply", "write a completed task's changes into your project folder (uncommitted)")]:
         sub.add_parser(name, help=help_).add_argument("id", type=int)
     sub.add_parser("summarize", help="summarize a task with the local model (sources cited)").add_argument("id", type=int)
-    sub.add_parser("integrate", help="merge a completed task into the integration branch (checks run on the result)").add_argument("id", type=int)
+    sub.add_parser("integrate", help="merge completed tasks into the integration branch (checks run once on the result)").add_argument("id", type=int, nargs="+")
     rv = sub.add_parser("review", help="queue a read-only review of a completed task's exact result")
     rv.add_argument("id", type=int)
     rv.add_argument("-a", "--agent", default="claude", choices=sorted(runtime.ADAPTERS), help="default: claude")
@@ -511,7 +511,7 @@ def main(argv=None):
     elif args.cmd == "integrate":
         rt = runtime.Runtime(store)
         try:
-            commit = integrate.integrate(rt, args.id)
+            commit = integrate.integrate(rt, *args.id)
         except integrate.IntegrationError as e:
             sys.exit(f"not integrated: {e}")
         print(f"integrated at {commit[:10]}; checks passed")

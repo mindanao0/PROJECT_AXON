@@ -853,11 +853,15 @@ class Runtime:
         sandbox.clone(proj["path"], repo, base, f"axon/{tid}/{n}")
         ro = [*proj["objects"], *proj["ro"]]
 
-        if not t["approved"] and base != t["base"]:  # continuing an earlier attempt: did it change what runs unseen?
+        # Continuing an earlier attempt, or building on other tasks' results: did that change what runs unseen?
+        # (a dependent's own base already holds the dependencies' work, so it is judged against the project's HEAD)
+        seen = subprocess.run(["git", "-C", proj["path"], "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() \
+            if deps_of(t) else t["base"]
+        if not t["approved"] and base != seen:
             why = []
-            if planted := agent_config_changes(proj["path"], t["base"], base):
+            if planted := agent_config_changes(proj["path"], seen, base):
                 why.append(f"agent settings changed ({', '.join(planted)})")
-            if proj["prepare"] and sandbox.inputs_changed(proj["path"], t["base"], base, proj["prepare_inputs"]):
+            if proj["prepare"] and sandbox.inputs_changed(proj["path"], seen, base, proj["prepare_inputs"]):
                 why.append("dependency files changed (prepare runs with network)")
             if why:
                 return self._finish(t, aid, adir, "needs-approval", {"why": "; ".join(why)}, base, proj, ro)
@@ -890,6 +894,7 @@ class Runtime:
         if interactive and t["agent"] == "claude":
             trust_folder(home, repo)
         env["AXON_ATTEMPT"] = str(n)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"  # tests an agent runs must not leave .pyc files in its result
         # io (socket, MCP config) is read-only: connect() still works, replacing them does not.
         # ponytail: tasks of one project may write the same rw folder at once; serialize them if that bites.
         box = sandbox.bwrap(repo, rw=[repo, home, *dirs], ro=[*ro, str(io), *extra_ro], env=env)

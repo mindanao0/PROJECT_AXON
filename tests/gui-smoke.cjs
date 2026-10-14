@@ -141,7 +141,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert.equal(await page.locator('#sync-state').textContent(),'SYNC / OFFLINE');
     await page.keyboard.press('Control+k');
     await page.locator('#command-search').fill('create new task');
-    assert(await page.getByRole('option').isDisabled(),'Offline palette must disable new tasks');
+    assert(await page.locator('#command-dialog').getByRole('option').isDisabled(),'Offline palette must disable new tasks');
     await page.keyboard.press('Enter');
     assert(await page.locator('#command-dialog').isVisible(),'Offline action must not execute');
 

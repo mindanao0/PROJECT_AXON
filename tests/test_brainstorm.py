@@ -149,6 +149,15 @@ class Brainstorm(AxonTest):
         with self.assertRaisesRegex(ValueError, '"checks" must be a list'):
             brainstorm.parse_plan(plan(tasks=[task("a", checks="unit")]))
 
+    def test_retrying_a_phase_also_makes_again_the_waiting_tasks_that_follow_a_dead_one(self):
+        bid = self.start(HAPPY)
+        ids = brainstorm.create_tasks(self.store, bid)
+        self.store.move(ids["a"], "FAILED", ("QUEUED",), note="could not")  # b is still queued, waiting for a
+        again = brainstorm.create_tasks(self.store, bid, "p1")
+        self.assertEqual(self.store.one("select status from tasks where id = ?", ids["b"])["status"], "CANCELLED")
+        self.assertEqual(self.store.one("select after from tasks where id = ?", again["b"])["after"], again["a"])
+        self.assertEqual(self.store.one("select status from tasks where id = ?", again["b"])["status"], "QUEUED")
+
     def test_the_checker_is_told_an_empty_phase_is_deliberate(self):
         self.assertIn("do not object that it has no tasks", brainstorm.STEPS["check"])
 

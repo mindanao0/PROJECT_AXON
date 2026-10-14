@@ -42,7 +42,7 @@ SCHEMA = """{"goal": "...", "summary": "...", "design": "how it fits together an
 Phases run one after another. If the whole goal needs at most """ + str(PHASE_CAP) + """ tasks, write them all (one phase is fine). If it needs more,
 write the phases only and leave every "tasks" empty: each phase is broken into tasks later, when the phases before it are done and
 their results are known. Each task is read later by an agent that has seen nothing of this brainstorm: it must make sense on its own.
-A task starts from the project as it is plus the results of the tasks in its "after", and sees nothing of any other task (tasks without a dependency between them run at the same time): so a task that needs a file another task writes must list that task in "after", and every file belongs to the scope of one task only."""
+A task starts from the project as it is plus the results of the tasks in its "after", and sees nothing of any other task (tasks without a dependency between them run at the same time): so a task that needs a file another task writes must list that task in "after", and every file belongs to the scope of one task only. Claude has no shell: it cannot delete, move or rename a file, so give any task that does to codex. Neither runs git (Axon records their work itself): no step or acceptance item may use git; say \"delete the file\" and check it with python or ls."""
 RULES = ("Nothing is built in a brainstorm: read the code if it helps, never edit files.",
          "Never guess or assume. Anything unclear or unknown: call ask_user, at any time and as often as needed. "
          "Ask everything you need in ONE call, as questions=[{question, options}]; give every question whose answer is a choice its own "
@@ -657,11 +657,17 @@ def create_tasks(store, bid, pid=None):
     ids = d.setdefault("created", {})
     phases = phases_of(d["plan"])
     before = phases[phases.index(ph) - 1] if phases.index(ph) else {}
+    redo = _dead(store, d, ph)
     for t in ph["tasks"]:
-        if ids.get(t["id"]) and t["id"] not in _dead(store, d, ph):
-            continue  # already queued, running or done: only what failed or was stopped is made again
         # a task with no dependency in its phase builds on the whole phase before it; HEAD is only where a first phase starts
         deps = [ids[x] for x in after_of(t)] or [ids[x["id"]] for x in before.get("tasks") or []]
+        waiting = ids.get(t["id"]) and any(x in redo for x in after_of(t)) \
+            and store.one("select 1 from tasks where id = ? and status = 'QUEUED'", ids[t["id"]])
+        if ids.get(t["id"]) and t["id"] not in redo and not waiting:
+            continue  # already queued, running or done: only what failed or was stopped is made again
+        if waiting:  # it waits for a task that is being made again: it follows the new one, not the dead one
+            runtime.stop_task(store, ids[t["id"]])
+        redo.add(t["id"])
         tid, dup = runtime.add_task(store, b["project"], t["agent"], brief(t, d["plan"], d["qa"]), t["scope"], "HEAD", t["title"][:120],
                                     after=deps[0] if deps else None, needs=deps[1:], checks=t.get("checks") or None)
         ids[t["id"]] = tid or dup
